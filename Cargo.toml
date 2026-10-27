@@ -32,11 +32,17 @@ derive = ["dep:architecturekit-macros"]
 [dependencies]
 architecturekit-macros = { path = "architecturekit-macros", version = "=0.4.0", optional = true }
 chrono = { version = "0.4.45", default-features = false }
+ed25519-dalek = "3.0.0"
 eventsourcingdb = "4.0.3"
+futures-util = "0.3.31"
+log = "0.4.27"
 serde = "1.0.229"
 serde_json = "1.0.154"
+tokio = { version = "1.52.3", features = ["rt", "sync"] }
 
 [dev-dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
+eventsourcingdb = { version = "4.0.3", features = ["testcontainer"] }
 serde = { version = "1.0.229", features = ["derive"] }
-tokio = { version = "1.52.3", features = ["macros", "rt"] }
+tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+url = "2.5.4"

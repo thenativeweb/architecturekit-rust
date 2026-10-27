@@ -192,7 +192,7 @@ pub trait State: Default + Clone {
 
 /// Returns the event type a state starts from, if any, after checking that the
 /// state has a rule for it.
-fn from_latest_of<S: State>() -> Option<&'static str> {
+pub(crate) fn from_latest_of<S: State>() -> Option<&'static str> {
     let event_type = S::from_latest()?;
     assert!(
         S::Event::has_rule(event_type),
