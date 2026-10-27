@@ -357,7 +357,11 @@ fn refuses_to_upsert_an_item_under_another_key() {
         failure.to_string(),
         r#"permanent failure: event 1 upserts an item with the key "" under the key "42""#
     );
-    assert!(ids_in(&view).is_empty(), "a refused item must not be added");
+    assert_eq!(
+        ids_in(&view),
+        Vec::<String>::new(),
+        "a refused item must not be added"
+    );
 
     must_insert(&view, "2", Book::new("42"));
     let failure = view
@@ -805,7 +809,7 @@ fn looks_up_items_by_value() {
     must_insert(&view, "3", Book::new("c").on("left"));
 
     assert_eq!(ids_of(&by_shelf.lookup("left")), ["a", "c"]);
-    assert!(by_shelf.lookup("nowhere").is_empty());
+    assert_eq!(by_shelf.lookup("nowhere"), Vec::<Book>::new());
 }
 
 #[test]
@@ -819,7 +823,7 @@ fn follows_a_changed_value() {
         Ok(Outcome::Applied)
     );
 
-    assert!(by_shelf.lookup("left").is_empty());
+    assert_eq!(by_shelf.lookup("left"), Vec::<Book>::new());
     assert_eq!(ids_of(&by_shelf.lookup("right")), ["a"]);
 }
 
@@ -857,7 +861,7 @@ fn updates_and_deletes_by_value() {
 
     assert_eq!(by_shelf.delete("left", &event("10")), Ok(2));
 
-    assert!(by_shelf.lookup("left").is_empty());
+    assert_eq!(by_shelf.lookup("left"), Vec::<Book>::new());
     assert_eq!(ids_in(&view), ["b"]);
 }
 
@@ -903,8 +907,9 @@ fn forgets_a_value_once_no_item_has_it() {
 
     assert_eq!(view.delete("a", &event("5")), Ok(Outcome::Applied));
     assert_eq!(view.delete("b", &event("6")), Ok(Outcome::Applied));
-    assert!(
-        sizes().is_empty(),
+    assert_eq!(
+        sizes(),
+        HashMap::new(),
         "a value that a delete left behind is kept"
     );
 }
@@ -999,8 +1004,9 @@ fn keeps_an_index_on_data_that_a_change_writes_into() {
         Ok(Outcome::Applied)
     );
 
-    assert!(
-        by_genre.lookup("fiction").is_empty(),
+    assert_eq!(
+        by_genre.lookup("fiction"),
+        Vec::<ShelfItem>::new(),
         "the index must not find the shelf under its old value"
     );
     assert_eq!(
@@ -1364,8 +1370,9 @@ fn removes_an_item_in_a_later_part() {
             )
             .unwrap_or_else(|failure| panic!("{removal:?}: {failure}"));
 
-        assert!(
-            ids_in(&catalog.view).is_empty(),
+        assert_eq!(
+            ids_in(&catalog.view),
+            Vec::<String>::new(),
             "{removal:?}: the second part has to remove the item the first one changed"
         );
         assert_eq!(catalog.removed.get(), 1, "{removal:?}");
@@ -1375,7 +1382,7 @@ fn removes_an_item_in_a_later_part() {
             .apply(Some(&BOOK_UPCASTERS), &[shelved_and_discarded])
             .unwrap_or_else(|failure| panic!("{removal:?}: {failure}"));
 
-        assert!(ids_in(&catalog.view).is_empty(), "{removal:?}");
+        assert_eq!(ids_in(&catalog.view), Vec::<String>::new(), "{removal:?}");
         assert_eq!(
             catalog.removed.get(),
             1,

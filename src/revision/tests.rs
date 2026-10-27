@@ -318,7 +318,11 @@ async fn returns_without_waiting_if_no_events_were_written() {
     let waited = wait_for_written(&view, &[], Duration::from_secs(3600)).await;
 
     assert!(matches!(waited, Ok(())), "{waited:?}");
-    assert!(view.asked().is_empty(), "the view must not be asked");
+    assert_eq!(
+        view.asked(),
+        Vec::<String>::new(),
+        "the view must not be asked"
+    );
 }
 
 #[tokio::test]
