@@ -32,6 +32,7 @@ derive = ["dep:architecturekit-macros"]
 [dependencies]
 architecturekit-macros = { path = "architecturekit-macros", version = "=0.2.0", optional = true }
 chrono = { version = "0.4.45", default-features = false }
+eventsourcingdb = "4.0.3"
 serde = "1.0.229"
 serde_json = "1.0.154"
 

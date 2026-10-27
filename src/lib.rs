@@ -20,13 +20,19 @@
 #[cfg(test)]
 extern crate self as architecturekit;
 
+mod command;
+mod error;
 mod event;
 #[cfg(doctest)]
 mod refusals;
+mod revision;
 mod schema;
 mod subject;
 
+pub use command::{Command, Precondition, PreconditionsError, check_preconditions};
+pub use error::{Categorized, Category, DomainError, Failure, Permanent, Transient};
 pub use event::Event;
+pub use revision::{NotARevision, compare_revisions, parse_revision};
 pub use schema::Schema;
 pub use subject::{SubjectScheme, SubjectValuesError};
 
