@@ -1,7 +1,8 @@
 use std::{error::Error, fmt};
 
 use crate::{
-    Categorized, Category, Failure, NotARevision, Permanent, PreconditionsError, Transient,
+    Categorized, Category, EmptyRange, Failure, NotARevision, Permanent, PreconditionsError,
+    ReadOptionsError, Transient,
 };
 
 use super::failure::{Sorted, WriteSorted};
@@ -304,6 +305,79 @@ impl<D: Categorized> Categorized for ExecuteError<D> {
             Self::Transient(failure) => failure.category(),
             Self::Permanent(failure) => failure.category(),
             Self::OutcomeUnknown(_) | Self::NotARevision(_) => None,
+        }
+    }
+}
+
+/// Why reading events failed.
+#[derive(Debug)]
+pub enum ReadError {
+    /// Trying again later may succeed, for example once the database can be
+    /// reached again.
+    Transient(Transient),
+    /// Trying again will not help, for example since an event failed its
+    /// verification, or the database refuses the read.
+    Permanent(Permanent),
+    /// An ID of a bound is not the ID of an event, so nothing was read. It
+    /// belongs to no category.
+    NotARevision(NotARevision),
+    /// The bounds leave no room for an event, so nothing was read. It belongs
+    /// to no category.
+    EmptyRange(EmptyRange),
+}
+
+impl From<Sorted> for ReadError {
+    fn from(sorted: Sorted) -> Self {
+        match sorted {
+            Sorted::Transient(failure) => Self::Transient(failure),
+            Sorted::Permanent(failure) => Self::Permanent(failure),
+        }
+    }
+}
+
+impl From<Permanent> for ReadError {
+    fn from(failure: Permanent) -> Self {
+        Self::Permanent(failure)
+    }
+}
+
+impl From<ReadOptionsError> for ReadError {
+    fn from(refusal: ReadOptionsError) -> Self {
+        match refusal {
+            ReadOptionsError::NotARevision(refusal) => Self::NotARevision(refusal),
+            ReadOptionsError::EmptyRange(refusal) => Self::EmptyRange(refusal),
+        }
+    }
+}
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Transient(failure) => failure.fmt(formatter),
+            Self::Permanent(failure) => failure.fmt(formatter),
+            Self::NotARevision(refusal) => refusal.fmt(formatter),
+            Self::EmptyRange(refusal) => refusal.fmt(formatter),
+        }
+    }
+}
+
+impl Error for ReadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Transient(failure) => failure.source(),
+            Self::Permanent(failure) => failure.source(),
+            Self::NotARevision(refusal) => refusal.source(),
+            Self::EmptyRange(refusal) => refusal.source(),
+        }
+    }
+}
+
+impl Categorized for ReadError {
+    fn category(&self) -> Option<Category> {
+        match self {
+            Self::Transient(failure) => failure.category(),
+            Self::Permanent(failure) => failure.category(),
+            Self::NotARevision(_) | Self::EmptyRange(_) => None,
         }
     }
 }

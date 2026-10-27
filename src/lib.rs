@@ -24,6 +24,7 @@ mod command;
 mod decider;
 mod error;
 mod event;
+mod read;
 #[cfg(doctest)]
 mod refusals;
 mod revision;
@@ -39,11 +40,16 @@ pub use command::{Command, Precondition, PreconditionsError, check_preconditions
 pub use decider::Decider;
 pub use error::{Categorized, Category, DomainError, Failure, Permanent, Transient};
 pub use event::Event;
+pub use read::{
+    EmptyRange, IfLatestEventIsMissing, LowerBound, Order, ReadOptions, ReadOptionsError, Subjects,
+    UpperBound, check_read_options,
+};
 pub use revision::{NotARevision, compare_revisions, parse_revision};
 pub use schema::Schema;
 pub use state::{EventSchema, Events, State, replay, replay_stored, step, step_stored};
 pub use store::{
-    Error, EventOn, ExecuteError, LoadError, RegisterSchemasError, Store, StoreBuilder, WriteError,
+    Error, EventOn, ExecuteError, LoadError, ReadError, RegisterSchemasError, Store, StoreBuilder,
+    WriteError,
 };
 pub use subject::{SubjectScheme, SubjectValuesError};
 pub use upcast::{UpcastEvent, Upcasters};

@@ -18,6 +18,7 @@ mod database;
 mod execute;
 mod failed_writes;
 mod fake;
+mod read;
 mod state_cache;
 
 use std::{collections::HashMap, error::Error};

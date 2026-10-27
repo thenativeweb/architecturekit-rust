@@ -8,16 +8,17 @@ use eventsourcingdb::{
         Bound, BoundType, ReadEventMissingStrategy, ReadEventsOptions, ReadFromLatestEventOptions,
     },
 };
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt, future};
 use serde_json::Value;
 use tokio::sync::oneshot;
 
 use crate::{
-    Command, Decider, Event, EventSchema, Events, Failure, Permanent, Precondition, State,
-    Transient, UpcastEvent,
+    Command, Decider, Event, EventSchema, Events, Failure, Permanent, Precondition, ReadOptions,
+    State, Subjects, Transient, UpcastEvent,
     command::{
         checked_preconditions, resolve_preconditions, violated_precondition, write_preconditions,
     },
+    read::{check_read_options, database_options},
     state::{evolve_by_stored, from_latest_of},
 };
 
@@ -29,7 +30,7 @@ mod state_cache;
 mod tests;
 
 pub use any::Error;
-pub use error::{ExecuteError, LoadError, RegisterSchemasError, WriteError};
+pub use error::{ExecuteError, LoadError, ReadError, RegisterSchemasError, WriteError};
 use failure::{database_failure, is_schema_conflict, read_failure, schema_refusal, write_failure};
 use state_cache::StateCache;
 
@@ -306,6 +307,66 @@ impl Store {
         }
 
         Ok((current, last_event_id))
+    }
+
+    /// Hands out the events of the given subjects as they are stored, for a read
+    /// that neither [`load`](Store::load) nor a projection fits: one page of a
+    /// long stream, the events up to a certain one, or a single event. Every
+    /// event is verified like everything else the store reads, before the
+    /// caller sees it. Neither upcasters nor states apply, since there is no
+    /// state.
+    ///
+    /// Without options, it hands out every event of the subjects, oldest
+    /// first. The bounds and the order of [`ReadOptions`] narrow that down.
+    /// The stream ends with the first failure, and dropping it stops reading.
+    ///
+    /// # Errors
+    ///
+    /// Fails before the database is asked, as [`check_read_options`] does,
+    /// with [`ReadError::NotARevision`] for an ID of a bound that is not the
+    /// ID of an event, and with [`ReadError::EmptyRange`] for bounds that
+    /// leave no room for an event. Otherwise it fails, or the stream ends,
+    /// with [`ReadError::Transient`] if the database can not be reached, and
+    /// with [`ReadError::Permanent`] if an event fails its verification or the
+    /// database refuses the read.
+    ///
+    /// # Panics
+    ///
+    /// Panics for options that contradict each other (see
+    /// [`LowerBound::FromLatestEvent`](crate::LowerBound::FromLatestEvent)).
+    pub async fn read<'a>(
+        &'a self,
+        subjects: &'a Subjects,
+        options: &'a ReadOptions,
+    ) -> Result<impl Stream<Item = Result<eventsourcingdb::Event, ReadError>> + 'a, ReadError> {
+        check_read_options(options)?;
+
+        let doing = format!("reading {:?}", subjects.subject());
+        let events = self
+            .client
+            .read_events(
+                subjects.subject(),
+                Some(database_options(subjects, options)),
+            )
+            .await
+            .map_err(|error| ReadError::from(read_failure(error, &doing)))?;
+
+        Ok(events
+            .map(move |event| {
+                let event = event.map_err(|error| ReadError::from(read_failure(error, &doing)))?;
+                self.verify(&event)?;
+
+                Ok(event)
+            })
+            .scan(false, |has_failed, event: Result<_, ReadError>| {
+                // The stream ends with the first failure.
+                if *has_failed {
+                    return future::ready(None);
+                }
+                *has_failed = event.is_err();
+
+                future::ready(Some(event))
+            }))
     }
 
     /// Checks an event the store has read: its hash, unless the store was
