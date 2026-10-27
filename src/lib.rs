@@ -40,7 +40,9 @@ pub use event::Event;
 pub use revision::{NotARevision, compare_revisions, parse_revision};
 pub use schema::Schema;
 pub use state::{EventSchema, Events, State, replay, replay_stored, step, step_stored};
-pub use store::{EventOn, LoadError, RegisterSchemasError, Store, StoreBuilder, WriteError};
+pub use store::{
+    Error, EventOn, ExecuteError, LoadError, RegisterSchemasError, Store, StoreBuilder, WriteError,
+};
 pub use subject::{SubjectScheme, SubjectValuesError};
 pub use upcast::{UpcastEvent, Upcasters};
 

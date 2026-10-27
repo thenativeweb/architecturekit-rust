@@ -1,5 +1,7 @@
 use std::{any, error::Error, fmt};
 
+use eventsourcingdb::error::{ClientError, code};
+
 use crate::{Categorized, Category, Failure, NotARevision, Permanent, parse_revision};
 
 #[cfg(test)]
@@ -196,7 +198,72 @@ impl Precondition {
 /// [`Precondition::on_event_id`] that is not a revision, so that a mistake in
 /// the code is not hidden behind one of the caller.
 pub fn check_preconditions<C: Command + ?Sized>(command: &C) -> Result<(), PreconditionsError> {
-    check(&command.preconditions(), any::type_name::<C>())
+    checked_preconditions(command).map(|_| ())
+}
+
+/// Returns the preconditions a command declares, once they are checked as
+/// [`check_preconditions`] checks them.
+pub(crate) fn checked_preconditions<C: Command + ?Sized>(
+    command: &C,
+) -> Result<Vec<Precondition>, PreconditionsError> {
+    let declared = command.preconditions();
+    check(&declared, any::type_name::<C>())?;
+
+    Ok(declared)
+}
+
+/// Returns the declared precondition that the database names as the one that
+/// did not hold, given the failure of a conflict.
+///
+/// A database that offers the v2 API names it in the details of its answer, by
+/// its index among the preconditions it checked, which is the index of the
+/// declared one (see [`resolve_preconditions`]). A database that offers just
+/// the v1 API names none, nor does an answer with another code, or details
+/// without an index that fits the declared preconditions, so then it returns
+/// `None`.
+pub(crate) fn violated_precondition<'a>(
+    conflict: &Failure,
+    declared: &'a [Precondition],
+) -> Option<&'a Precondition> {
+    let Some(ClientError::DbApiError(answer)) = conflict.cause()?.downcast_ref::<ClientError>()
+    else {
+        return None;
+    };
+    if answer.code != code::PRECONDITION_VIOLATED {
+        return None;
+    }
+
+    let index = answer.details.get("precondition")?.as_u64()?;
+    declared.get(usize::try_from(index).ok()?)
+}
+
+/// Turns the declared preconditions of a command into the ones the database
+/// checks, given the ID of the last event the state was read up to, which is
+/// `None` for a subject without events.
+///
+/// It turns every declared precondition into exactly one, in the order they
+/// are declared, and adds none of its own, so that the index by which the
+/// database names a precondition that did not hold is the index of the
+/// declared one. Only [`Precondition::unconditionally`] turns into none, but a
+/// command declares it alone, so then nothing is checked at all.
+pub(crate) fn resolve_preconditions(
+    subject: &str,
+    declared: Vec<Precondition>,
+    last_event_id: Option<&str>,
+) -> Vec<eventsourcingdb::Precondition> {
+    declared
+        .into_iter()
+        .filter_map(|precondition| match precondition.kind {
+            Kind::Required(database) | Kind::OnEventId { database, .. } => Some(database),
+            Kind::OnStateRead => Some(match last_event_id {
+                Some(event_id) => {
+                    eventsourcingdb::Precondition::is_subject_on_event_id(subject, event_id, None)
+                }
+                None => eventsourcingdb::Precondition::is_subject_pristine(subject, None),
+            }),
+            Kind::Unconditionally => None,
+        })
+        .collect()
 }
 
 /// Checks the preconditions of a write the way [`check_preconditions`] checks

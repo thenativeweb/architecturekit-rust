@@ -3,7 +3,7 @@ use std::{cmp::Ordering, error::Error, fmt};
 use crate::{Categorized, Category};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// The largest event ID EventSourcingDB hands out, since it numbers its
 /// events with signed 64-bit integers.

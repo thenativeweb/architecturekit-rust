@@ -4,7 +4,7 @@
 // with the store. Two cases of TestExecuteWithInvalidPreconditions do not apply
 // to Rust, since a Precondition can only be made by its functions: a zero
 // value, and a requirement of nothing. The other two are checked here
-// directly, until Execute checks them as well.
+// directly, as Execute checks them before it reads.
 //
 // The preconditions of the client SDK can not be compared with ==, so the
 // tests compare them by the JSON the client sends for them.
