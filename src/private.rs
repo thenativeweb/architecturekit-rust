@@ -2,8 +2,48 @@
 
 use std::cell::RefCell;
 
-pub use serde_json::Value;
+pub use serde_json::{Error as JsonError, Value};
 use serde_json::{Map, json};
+
+use crate::Event;
+
+/// Writes the data of an event as JSON, for the derive of `Events`.
+///
+/// # Errors
+///
+/// Fails if serde can not write the data.
+pub fn to_data<E: Event>(event: &E) -> Result<Value, JsonError> {
+    serde_json::to_value(event)
+}
+
+/// Reads the data of an event from JSON, for the derive of `Events`.
+///
+/// # Errors
+///
+/// Fails if the data does not match the event.
+pub fn from_data<E: Event>(data: Value) -> Result<E, JsonError> {
+    serde_json::from_value(data)
+}
+
+/// Tells whether two strings are the same, at compile time, so that the derive
+/// of `Events` can refuse two variants of the same event type while compiling.
+#[must_use]
+pub const fn same_str(left: &str, right: &str) -> bool {
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    if left.len() != right.len() {
+        return false;
+    }
+
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+
+    true
+}
 
 thread_local! {
     /// The types whose schemas are being derived on this thread, innermost

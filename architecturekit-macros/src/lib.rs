@@ -18,6 +18,7 @@
 )]
 
 mod attributes;
+mod events;
 mod rename;
 
 use proc_macro::TokenStream;
@@ -36,6 +37,16 @@ use crate::attributes::{ContainerAttributes, FieldAttributes};
 pub fn derive_event(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     expand_event(&input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Derives `architecturekit::Events` for the enum of the events a state evolves
+/// by. See `architecturekit::Events`.
+#[proc_macro_derive(Events)]
+pub fn derive_events(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    events::expand_events(&input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }

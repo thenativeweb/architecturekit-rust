@@ -21,23 +21,29 @@
 extern crate self as architecturekit;
 
 mod command;
+mod decider;
 mod error;
 mod event;
 #[cfg(doctest)]
 mod refusals;
 mod revision;
 mod schema;
+mod state;
 mod subject;
+mod upcast;
 
 pub use command::{Command, Precondition, PreconditionsError, check_preconditions};
+pub use decider::Decider;
 pub use error::{Categorized, Category, DomainError, Failure, Permanent, Transient};
 pub use event::Event;
 pub use revision::{NotARevision, compare_revisions, parse_revision};
 pub use schema::Schema;
+pub use state::{EventSchema, Events, State, replay, replay_stored, step, step_stored};
 pub use subject::{SubjectScheme, SubjectValuesError};
+pub use upcast::{UpcastEvent, Upcasters};
 
 #[cfg(feature = "derive")]
-pub use architecturekit_macros::{Event, Schema};
+pub use architecturekit_macros::{Event, Events, Schema};
 
 #[doc(hidden)]
 #[path = "private.rs"]
