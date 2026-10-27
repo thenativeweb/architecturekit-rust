@@ -14,8 +14,9 @@
 // there is no error of an ended context that a mistake in the code could hide
 // behind. Two cases of reporting a mistake in the code before an ID that is not
 // a revision can not be written in Rust: a zero Precondition, and a
-// requirement of nothing. The tests that compare an error with the one of the
-// test fixture come with the fixture.
+// requirement of nothing. Execute and the test fixture check the
+// preconditions and encode the events with the same functions, so their errors
+// are the same, and the tests of the fixture check its wording.
 
 use std::{
     collections::HashMap,
@@ -33,9 +34,8 @@ use super::{
         Increment, KitWrite, SOURCE, chain, counter_decider, emitting, event_types_in, total_in,
         write_past_the_kit,
     },
-    database::{self, subject_for},
+    database::{Database, subject_for},
     fake::{Api, Fake, Requests, dead_client},
-    store,
 };
 use crate::{
     Categorized, Category, Decider, DomainError, Error, Event, EventOn, Events, ExecuteError,
@@ -56,7 +56,8 @@ async fn unasked() -> (Store, Requests) {
 
 #[tokio::test]
 async fn writes_events_and_returns_them() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("execute-writes");
 
     let written = store
@@ -75,7 +76,8 @@ async fn writes_events_and_returns_them() {
 
 #[tokio::test]
 async fn appends_to_an_existing_subject() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("execute-appends");
 
     for by in [1, 2, 4] {
@@ -90,7 +92,8 @@ async fn appends_to_an_existing_subject() {
 
 #[tokio::test]
 async fn returns_the_error_of_the_decider_without_writing() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("execute-refuses");
 
     let _ = store
@@ -117,7 +120,8 @@ async fn returns_the_error_of_the_decider_without_writing() {
 
 #[tokio::test]
 async fn writes_nothing_when_the_decider_decides_on_no_events() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("execute-nothing");
 
     let written = store
@@ -131,7 +135,8 @@ async fn writes_nothing_when_the_decider_decides_on_no_events() {
 
 #[tokio::test]
 async fn appends_blindly_when_unconditional() {
-    let store = Arc::new(store().await);
+    let database = Database::start().await;
+    let store = Arc::new(database.store().await);
     let decider = Arc::new(counter_decider());
     let subject = subject_for("execute-blindly");
 
@@ -159,7 +164,8 @@ async fn appends_blindly_when_unconditional() {
 
 #[tokio::test]
 async fn admits_only_one_with_a_pristine_precondition() {
-    let store = Arc::new(store().await);
+    let database = Database::start().await;
+    let store = Arc::new(database.store().await);
     let decider = Arc::new(counter_decider());
     let subject = subject_for("execute-pristine");
 
@@ -189,7 +195,8 @@ async fn admits_only_one_with_a_pristine_precondition() {
 
 #[tokio::test]
 async fn detects_stale_reads_with_a_revision_precondition() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("execute-stale");
 
     let written = store
@@ -225,7 +232,8 @@ async fn detects_stale_reads_with_a_revision_precondition() {
 
 #[tokio::test]
 async fn reports_a_conflict_rather_than_trying_again() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("execute-conflict");
 
     // A pristine precondition on a populated subject can never hold, so this
@@ -253,10 +261,12 @@ async fn reports_a_conflict_rather_than_trying_again() {
 
 #[tokio::test]
 async fn fails_on_an_event_type_without_a_rule() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("execute-no-rule");
 
     write_past_the_kit(
+        &database,
         &subject,
         "io.thenativeweb.test.unexpected",
         json!({ "x": 1 }),
@@ -282,7 +292,8 @@ async fn fails_on_an_event_type_without_a_rule() {
 
 #[tokio::test]
 async fn writes_an_event_its_state_ignores() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("execute-ignored");
 
     let written = store
@@ -302,7 +313,7 @@ async fn writes_an_event_its_state_ignores() {
 
     assert_eq!(written.len(), 2);
     assert_eq!(
-        event_types_in(&subject).await,
+        event_types_in(&database, &subject).await,
         [Incremented::EVENT_TYPE, super::Annotated::EVENT_TYPE]
     );
 }
@@ -325,9 +336,10 @@ async fn reports_an_unreachable_database() {
 
 #[tokio::test]
 async fn reports_technical_write_failures() {
+    let database = Database::start().await;
     // The source has to be a valid URI, or the database refuses the write.
     // Reading still works, so this reaches the write.
-    let store = Store::builder(database::client().await, "not a valid uri").build();
+    let store = Store::builder(database.client().await, "not a valid uri").build();
 
     let failure = store
         .execute(
@@ -345,12 +357,14 @@ async fn reports_technical_write_failures() {
 
 #[tokio::test]
 async fn fails_when_stored_data_does_not_match_the_rule() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("execute-mismatch");
 
     // The annotated type has no schema, so the database lets a field of
     // another type through, and the state trips over it when reading.
     write_past_the_kit(
+        &database,
         &subject,
         super::Annotated::EVENT_TYPE,
         json!({ "note": 42 }),
@@ -391,11 +405,13 @@ impl State for Labels {
 
 #[tokio::test]
 async fn reports_a_schema_violation_as_permanent() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
 
     // The schema asks for a label that is not empty, which the type of the
     // event can not express, so it is registered past the kit.
-    let _ = database::client()
+    let _ = database
+        .client()
         .await
         .register_event_schema(
             Labelled::EVENT_TYPE,
@@ -463,10 +479,12 @@ impl State for Migrating {
 
 #[tokio::test]
 async fn reports_a_failing_upcaster() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("execute-upcaster");
 
     write_past_the_kit(
+        &database,
         &subject,
         "io.thenativeweb.test.outdated",
         json!({ "whatever": true }),
@@ -654,7 +672,8 @@ async fn reports_a_mistake_in_the_code_before_an_id_that_is_not_a_revision() {
 
 #[tokio::test]
 async fn lets_the_database_check_an_id_that_is_a_revision() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("execute-revision");
     let on = |event_id: &str| {
         let subject = subject.clone();
@@ -722,7 +741,8 @@ async fn lets_the_database_check_an_id_that_is_a_revision() {
 
 #[tokio::test]
 async fn leaves_require_with_the_revision_check_of_the_client_sdk_unchecked() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let command = Increment::new(&subject_for("execute-required"), 1).requiring_event_id("abc");
 
     let failure = store
@@ -811,7 +831,8 @@ fn encoding(
 
 #[tokio::test]
 async fn refuses_data_that_can_not_be_encoded_as_permanent_and_writes_nothing() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
 
     for (name, event_type, event, says) in UNENCODABLE {
         let subject = subject_for("execute-unencodable");
@@ -838,7 +859,7 @@ async fn refuses_data_that_can_not_be_encoded_as_permanent_and_writes_nothing() 
         );
         assert!(chain(&failure).contains(says), "{name}: {failure}");
         assert_eq!(
-            event_types_in(&subject).await,
+            event_types_in(&database, &subject).await,
             Vec::<String>::new(),
             "{name}: nothing was written"
         );
@@ -847,7 +868,8 @@ async fn refuses_data_that_can_not_be_encoded_as_permanent_and_writes_nothing() 
 
 #[tokio::test]
 async fn writes_none_of_the_events_if_the_second_can_not_be_encoded() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
 
     for (name, event_type, event, _) in UNENCODABLE {
         let subject = subject_for("execute-second-unencodable");
@@ -871,7 +893,7 @@ async fn writes_none_of_the_events_if_the_second_can_not_be_encoded() {
             "{name}: {failure}"
         );
         assert_eq!(
-            event_types_in(&subject).await,
+            event_types_in(&database, &subject).await,
             Vec::<String>::new(),
             "{name}: not even the first event was written"
         );
@@ -940,8 +962,9 @@ async fn fails_permanently_without_sending_a_write_the_database_does_not_support
 /// every error with a code, while one that offers just the v1 API reports this
 /// one without a code. The event is written past the store, so that nothing of
 /// the kit decides.
-async fn offers_just_the_v1_api() -> bool {
-    let refusal = database::client()
+async fn offers_just_the_v1_api(database: &Database) -> bool {
+    let refusal = database
+        .client()
         .await
         .write_events(
             vec![super::commands::candidate(
@@ -962,8 +985,9 @@ async fn offers_just_the_v1_api() -> bool {
 
 #[tokio::test]
 async fn writes_with_a_recursive_precondition_if_the_database_supports_it() {
-    let store = store().await;
-    let offers_just_the_v1_api = offers_just_the_v1_api().await;
+    let database = Database::start().await;
+    let store = database.store().await;
+    let offers_just_the_v1_api = offers_just_the_v1_api(&database).await;
 
     for write in KitWrite::ALL {
         let subject = subject_for("execute-recursive");
@@ -978,13 +1002,17 @@ async fn writes_with_a_recursive_precondition_if_the_database_supports_it() {
                 &format!("{write:?}"),
             );
             assert_eq!(
-                event_types_in(&subject).await,
+                event_types_in(&database, &subject).await,
                 Vec::<String>::new(),
                 "{write:?}: nothing was written"
             );
         } else {
             let _ = written.expect("the database offers the v2 API");
-            assert_eq!(event_types_in(&subject).await.len(), 1, "{write:?}");
+            assert_eq!(
+                event_types_in(&database, &subject).await.len(),
+                1,
+                "{write:?}"
+            );
         }
     }
 }

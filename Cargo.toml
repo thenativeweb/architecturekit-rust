@@ -25,9 +25,14 @@ keywords = [
 ]
 categories = ["database"]
 
+[package.metadata.docs.rs]
+features = ["testcontainers"]
+
 [features]
 default = ["derive"]
 derive = ["dep:architecturekit-macros"]
+testcontainers = ["testing", "eventsourcingdb/testcontainer"]
+testing = []
 
 [dependencies]
 architecturekit-macros = { path = "architecturekit-macros", version = "=0.7.0", optional = true }

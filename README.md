@@ -38,6 +38,30 @@ For a type within the data of an event, such as a nested struct, derive `Schema`
 
 Where Rust differs from Go, the schema follows what serde writes: a Go pointer, slice or map that may be nil corresponds to an `Option` in Rust, since serde never writes a `Vec` or a `HashMap` as null, and a `Vec<u8>` is an array of integers.
 
+## Testing Deciders
+
+The feature `testing` adds given-when-then for deciders in `architecturekit::testing`, and the feature `testcontainers` adds an EventSourcingDB in a container of a test's own, which needs Docker. Turn them on for the tests only:
+
+```shell
+cargo add architecturekit --dev --features testcontainers
+```
+
+A decider decides asynchronously, so a test runs on Tokio and waits for the decision:
+
+```rust
+use architecturekit::testing::given;
+
+#[tokio::test]
+async fn refuses_to_lend_a_book_that_is_lent_out() {
+    given(&lend_book(), [BookEvent::Lent(BookLent { reader: "Jane".to_owned() })])
+        .when(LendBook { book_id: "42".to_owned(), reader: "John".to_owned() })
+        .await
+        .then_failed(LendError::AlreadyLent);
+}
+```
+
+`then_failed` compares the error of the decider, which therefore implements `PartialEq` and `Debug`. Events are compared by their type and the JSON of their data, which is what would be stored, so they need no `PartialEq`.
+
 ## License
 
 architecturekit is licensed under the [MIT License](LICENSE.md).

@@ -16,11 +16,10 @@ use eventsourcingdb::EventCandidate;
 use futures_util::StreamExt;
 use serde_json::Value;
 
-use super::{Annotated, Counter, CounterEvent, Incremented, database};
+use super::{Annotated, Counter, CounterEvent, Incremented, database::Database};
 use crate::{Command, Decider, DomainError, Event, EventOn, Precondition, Store};
 
-/// The source of every event the tests write.
-pub(super) const SOURCE: &str = "https://thenativeweb.io";
+pub(super) use super::database::SOURCE;
 
 type Declaring = Arc<dyn Fn() -> Vec<Precondition> + Send + Sync>;
 
@@ -150,9 +149,10 @@ pub(super) fn annotating(note: &str) -> Decider<Increment, Counter, DomainError>
 /// writing what it decided conflicts. It returns the decider and how often it
 /// has decided so far.
 pub(super) async fn interfering(
+    database: &Database,
     times: usize,
 ) -> (Decider<Increment, Counter, DomainError>, Arc<AtomicUsize>) {
-    let client = Arc::new(database::client().await);
+    let client = Arc::new(database.client().await);
     let decide = Arc::new(counter_decider());
     let decisions = Arc::new(AtomicUsize::new(0));
 
@@ -248,8 +248,14 @@ pub(super) fn candidate(subject: &str, event_type: &str, data: Value) -> EventCa
 
 /// Writes an event of the given type and data to the subject past the kit, as
 /// somebody else would.
-pub(super) async fn write_past_the_kit(subject: &str, event_type: &str, data: Value) {
-    let _ = database::client()
+pub(super) async fn write_past_the_kit(
+    database: &Database,
+    subject: &str,
+    event_type: &str,
+    data: Value,
+) {
+    let _ = database
+        .client()
         .await
         .write_events(vec![candidate(subject, event_type, data)], Vec::new())
         .await
@@ -267,8 +273,8 @@ pub(super) async fn total_in(store: &Store, subject: &str) -> i64 {
 
 /// Returns the types of the events of the subject, read straight from the
 /// database, past the kit.
-pub(super) async fn event_types_in(subject: &str) -> Vec<String> {
-    let client = database::client().await;
+pub(super) async fn event_types_in(database: &Database, subject: &str) -> Vec<String> {
+    let client = database.client().await;
     let events = client
         .read_events(subject, None)
         .await

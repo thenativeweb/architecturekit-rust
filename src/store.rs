@@ -521,14 +521,7 @@ impl Store {
         event_type: &str,
         data: Result<Value, serde_json::Error>,
     ) -> Result<EventCandidate, Permanent> {
-        let data = data.map_err(|cause| {
-            Permanent::Other(Failure::new(
-                format!(
-                    "refusing to write an event of type {event_type:?} to {subject:?}, since its data can not be encoded as JSON",
-                ),
-                Some(Box::new(cause)),
-            ))
-        })?;
+        let data = data.map_err(|cause| unencodable(event_type, &subject, cause))?;
 
         Ok(EventCandidate {
             data,
@@ -699,6 +692,18 @@ fn collect_schemas(
     }
 
     Ok(collected)
+}
+
+/// Refuses to write an event whose data can not be encoded as JSON, naming its
+/// type, the subject, and the reason, since trying again would fail the same
+/// way. Executing, writing, and the test fixture refuse with it alike.
+pub(crate) fn unencodable(event_type: &str, subject: &str, cause: serde_json::Error) -> Permanent {
+    Permanent::Other(Failure::new(
+        format!(
+            "refusing to write an event of type {event_type:?} to {subject:?}, since its data can not be encoded as JSON",
+        ),
+        Some(Box::new(cause)),
+    ))
 }
 
 /// Runs work against the database on a task of its own, so that it is
