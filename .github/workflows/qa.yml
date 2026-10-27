@@ -70,7 +70,7 @@ jobs:
         cache: true
         build-warnings: ""
     - name: Install cargo-hack
-      uses: taiki-e/install-action@v2.87.28
+      uses: taiki-e/install-action@v2.87.29
       with:
         tool: cargo-hack
     # Go compiles every package on its own. Rust compiles a crate with the
