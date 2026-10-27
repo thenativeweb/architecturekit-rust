@@ -1,0 +1,79 @@
+name: QA
+
+on: pull_request
+
+concurrency:
+  group: qa-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    name: QA (${{ matrix.image-tag }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image-tag: [ latest, preview ]
+
+    env:
+      EVENTSOURCINGDB_IMAGE_TAG: ${{ matrix.image-tag }}
+
+    steps:
+    - name: Clone repository
+      uses: actions/checkout@v7.0.1
+    - name: Use Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+      with:
+        toolchain: stable
+        components: clippy, rustfmt
+        cache: false
+        build-warnings: ""
+    - name: Run QA
+      run: make qa
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Clone repository
+      uses: actions/checkout@v7.0.1
+    - name: Read minimum Rust version
+      run: |
+        msrv=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "architecturekit") | .rust_version // empty')
+        test -n "$msrv"
+        echo "MSRV=$msrv" >> "$GITHUB_ENV"
+    - name: Use Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+      with:
+        toolchain: ${{ env.MSRV }}
+        cache: true
+        build-warnings: ""
+    - name: Check with the minimum Rust version
+      run: cargo +"$MSRV" check --locked --all-features
+
+  features:
+    name: Features
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Clone repository
+      uses: actions/checkout@v7.0.1
+    - name: Use Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+      with:
+        toolchain: stable
+        cache: true
+        build-warnings: ""
+    - name: Install cargo-hack
+      uses: taiki-e/install-action@v2.87.28
+      with:
+        tool: cargo-hack
+    # Go compiles every package on its own. Rust compiles a crate with the
+    # features its user turns on, so every feature has to compile on its own.
+    - name: Check every feature on its own
+      run: cargo hack check --each-feature --locked

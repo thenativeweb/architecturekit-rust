@@ -1,0 +1,16 @@
+[package]
+name = "architecturekit"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Building blocks for DDD-based applications with CQRS and event sourcing, on top of the EventSourcingDB by the native web."
+repository = "https://github.com/thenativeweb/architecturekit-rust"
+license = "MIT"
+keywords = [
+  "cqrs",
+  "ddd",
+  "event-sourcing",
+  "esdb",
+  "eventsourcingdb",
+]
+categories = ["database"]
