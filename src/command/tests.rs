@@ -9,6 +9,7 @@
 // The preconditions of the client SDK can not be compared with ==, so the
 // tests compare them by the JSON the client sends for them.
 
+use eventsourcingdb::PreconditionOptions;
 use serde_json::Value;
 
 use crate::{
@@ -246,4 +247,146 @@ fn names_a_mistake_in_the_code_before_one_of_the_caller() {
         matches!(refusal, PreconditionsError::Permanent(_)),
         "{refusal:?}"
     );
+}
+
+// Comparing preconditions, which the tests of ArchitectureKit for Go check
+// through PreconditionsOf of the test fixture, and through "stands for the
+// revision check of the client SDK, but is a kind of its own" of
+// TestOnEventID.
+
+fn pristine(subject: &str, options: Option<PreconditionOptions>) -> Precondition {
+    Precondition::require(eventsourcingdb::Precondition::is_subject_pristine(
+        subject, options,
+    ))
+}
+
+fn populated(subject: &str, options: Option<PreconditionOptions>) -> Precondition {
+    Precondition::require(eventsourcingdb::Precondition::is_subject_populated(
+        subject, options,
+    ))
+}
+
+fn on_revision(subject: &str, options: Option<PreconditionOptions>) -> Precondition {
+    Precondition::require(eventsourcingdb::Precondition::is_subject_on_event_id(
+        subject, "9", options,
+    ))
+}
+
+fn recursive() -> PreconditionOptions {
+    PreconditionOptions { recursive: true }
+}
+
+fn query(query: &str) -> Precondition {
+    Precondition::require(eventsourcingdb::Precondition::is_eventql_query_true(query))
+}
+
+#[test]
+fn equals_a_precondition_that_checks_the_same() {
+    assert_eq!(
+        Precondition::on_pristine_subject("/account/1"),
+        pristine("/account/1", None)
+    );
+    assert_eq!(
+        Precondition::on_populated_subject("/account/2"),
+        populated("/account/2", None)
+    );
+    assert_eq!(
+        Precondition::on_event_id("/account/3", "9"),
+        Precondition::on_event_id("/account/3", "9")
+    );
+    assert_eq!(
+        query("FROM e IN events PROJECT INTO true"),
+        query("FROM e IN events PROJECT INTO true")
+    );
+    assert_eq!(Precondition::on_state_read(), Precondition::on_state_read());
+    assert_eq!(
+        Precondition::unconditionally(),
+        Precondition::unconditionally()
+    );
+}
+
+#[test]
+fn differs_from_a_precondition_on_another_subject_revision_or_query() {
+    assert_ne!(
+        Precondition::on_pristine_subject("/account/1"),
+        Precondition::on_pristine_subject("/account/other")
+    );
+    assert_ne!(
+        Precondition::on_event_id("/account/3", "9"),
+        Precondition::on_event_id("/account/3", "10")
+    );
+    assert_ne!(
+        query("FROM e IN events PROJECT INTO true"),
+        query("FROM e IN events PROJECT INTO false")
+    );
+}
+
+#[test]
+fn tells_a_pristine_from_a_populated_subject() {
+    assert_ne!(pristine("/account/1", None), populated("/account/1", None));
+}
+
+#[test]
+fn tells_a_recursive_subject_check_from_one_of_the_subject_alone() {
+    assert_ne!(
+        pristine("/account/1", None),
+        pristine("/account/1", Some(recursive()))
+    );
+    assert_ne!(
+        populated("/account/2", None),
+        populated("/account/2", Some(recursive()))
+    );
+    assert_ne!(
+        on_revision("/account/3", None),
+        on_revision("/account/3", Some(recursive()))
+    );
+}
+
+#[test]
+fn takes_options_that_leave_a_subject_check_to_the_subject_alone_as_none() {
+    // They mean the same to the database, but the client keeps them, so the
+    // JSON differs from one built without them.
+    let alone = || Some(PreconditionOptions { recursive: false });
+
+    assert_eq!(
+        pristine("/account/1", alone()),
+        pristine("/account/1", None)
+    );
+    assert_eq!(
+        populated("/account/2", alone()),
+        populated("/account/2", None)
+    );
+    assert_eq!(
+        on_revision("/account/3", alone()),
+        on_revision("/account/3", None)
+    );
+}
+
+#[test]
+fn tells_on_event_id_from_the_revision_check_it_stands_for() {
+    // Require leaves the ID unchecked, so the two behave differently.
+    assert_ne!(
+        Precondition::on_event_id("/account/3", "9"),
+        on_revision("/account/3", None)
+    );
+}
+
+#[test]
+fn tells_the_kinds_of_the_kit_apart() {
+    let kinds = [
+        Precondition::on_state_read(),
+        Precondition::unconditionally(),
+        Precondition::on_pristine_subject("/account/1"),
+        Precondition::on_event_id("/account/1", "9"),
+    ];
+
+    for (left_index, left) in kinds.iter().enumerate() {
+        for (right_index, right) in kinds.iter().enumerate() {
+            assert_eq!(
+                left == right,
+                left_index == right_index,
+                "{left:?} and {right:?}"
+            );
+        }
+    }
 }

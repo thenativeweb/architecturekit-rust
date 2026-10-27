@@ -1,6 +1,7 @@
 use std::{any, error::Error, fmt};
 
 use eventsourcingdb::error::{ClientError, code};
+use serde_json::Value;
 
 use crate::{Categorized, Category, Failure, NotARevision, Permanent, parse_revision};
 
@@ -53,12 +54,10 @@ pub trait Command {
 /// [`unconditionally`](Precondition::unconditionally), or with
 /// [`require`](Precondition::require) for any other precondition of the client
 /// SDK, such as an EventQL query.
-#[derive(Debug)]
 pub struct Precondition {
     kind: Kind,
 }
 
-#[derive(Debug)]
 enum Kind {
     Required(eventsourcingdb::Precondition),
     // The ID is kept apart as well, since it usually comes from the caller and
@@ -185,6 +184,72 @@ impl Precondition {
     pub fn is_unconditional(&self) -> bool {
         matches!(self.kind, Kind::Unconditionally)
     }
+}
+
+/// Two preconditions are equal if they check the same in the same way: if they
+/// are of the same kind, and the database checks the same for them. A check of
+/// a subject with options that leave it to the subject alone is the same as one
+/// without options, which is what they mean to the database.
+/// [`on_event_id`](Precondition::on_event_id) and
+/// [`require`](Precondition::require) with the same revision check are not
+/// equal, since only the former checks the ID before anything is read.
+impl PartialEq for Precondition {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.kind, &other.kind) {
+            (Kind::Required(left), Kind::Required(right))
+            | (
+                Kind::OnEventId { database: left, .. },
+                Kind::OnEventId {
+                    database: right, ..
+                },
+            ) => checked_alike(left) == checked_alike(right),
+            (Kind::OnStateRead, Kind::OnStateRead)
+            | (Kind::Unconditionally, Kind::Unconditionally) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Precondition {}
+
+/// Shows a precondition as the function that made it, with the JSON of the
+/// precondition of the client SDK that the database checks for it, such as
+/// `Precondition::require({"type":"isSubjectPristine",…})`.
+impl fmt::Debug for Precondition {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (made_by, database) = match &self.kind {
+            Kind::Required(database) => ("require", Some(database)),
+            Kind::OnEventId { database, .. } => ("on_event_id", Some(database)),
+            Kind::OnStateRead => ("on_state_read", None),
+            Kind::Unconditionally => ("unconditionally", None),
+        };
+
+        match database {
+            Some(database) => write!(
+                formatter,
+                "Precondition::{made_by}({})",
+                checked_alike(database)
+            ),
+            None => write!(formatter, "Precondition::{made_by}()"),
+        }
+    }
+}
+
+/// Returns what the database checks for a precondition of the client SDK, as
+/// the JSON the client sends for it, without options that change nothing.
+fn checked_alike(precondition: &eventsourcingdb::Precondition) -> Value {
+    let mut checked =
+        serde_json::to_value(precondition).expect("a precondition of the client SDK is JSON");
+    let unchanged = serde_json::to_value(eventsourcingdb::PreconditionOptions::default())
+        .expect("the options of a precondition are JSON");
+
+    if let Some(payload) = checked.get_mut("payload").and_then(Value::as_object_mut)
+        && payload.get("options") == Some(&unchanged)
+    {
+        let _ = payload.remove("options");
+    }
+
+    checked
 }
 
 /// Checks that a command declares its preconditions in a way they can be

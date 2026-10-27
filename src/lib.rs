@@ -31,6 +31,8 @@ mod schema;
 mod state;
 mod store;
 mod subject;
+#[cfg(feature = "testing")]
+pub mod testing;
 mod upcast;
 
 pub use command::{Command, Precondition, PreconditionsError, check_preconditions};

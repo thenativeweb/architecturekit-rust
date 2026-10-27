@@ -15,8 +15,8 @@ use serde_json::json;
 
 use super::{
     Counter, CounterEvent, Incremented, Reset,
-    commands::{Increment, SOURCE, counter_decider, write_past_the_kit},
-    database::{self, subject_for},
+    commands::{Increment, counter_decider, write_past_the_kit},
+    database::{Database, subject_for},
 };
 use crate::{Event, ExecuteError, State, Store};
 
@@ -93,17 +93,23 @@ impl State for Increments {
     }
 }
 
-async fn cached(max_subjects: usize) -> Store {
-    Store::builder(database::client().await, SOURCE)
-        .state_cache(max_subjects)
-        .build()
+async fn cached(database: &Database, max_subjects: usize) -> Store {
+    database
+        .store_with(|builder| builder.state_cache(max_subjects))
+        .await
 }
 
 /// Writes increments by the given amounts to the subject past the store, as
 /// another process would.
-async fn increment(subject: &str, amounts: &[i64]) {
+async fn increment(database: &Database, subject: &str, amounts: &[i64]) {
     for by in amounts {
-        write_past_the_kit(subject, Incremented::EVENT_TYPE, json!({ "by": by })).await;
+        write_past_the_kit(
+            database,
+            subject,
+            Incremented::EVENT_TYPE,
+            json!({ "by": by }),
+        )
+        .await;
     }
 }
 
@@ -113,10 +119,11 @@ async fn load<S: State>(store: &Store, subject: &str) -> S {
 
 #[tokio::test]
 async fn reads_all_events_every_time_without_a_state_cache() {
-    let store = super::store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("cache-without");
 
-    increment(&subject, &[3, 4]).await;
+    increment(&database, &subject, &[3, 4]).await;
     let _ = load::<Counting<0>>(&store, &subject).await;
     let _ = load::<Counting<0>>(&store, &subject).await;
 
@@ -125,12 +132,13 @@ async fn reads_all_events_every_time_without_a_state_cache() {
 
 #[tokio::test]
 async fn reads_only_the_events_written_since() {
-    let store = cached(10).await;
+    let database = Database::start().await;
+    let store = cached(&database, 10).await;
     let subject = subject_for("cache-since");
 
-    increment(&subject, &[3, 4]).await;
+    increment(&database, &subject, &[3, 4]).await;
     let _ = load::<Counting<1>>(&store, &subject).await;
-    increment(&subject, &[5]).await;
+    increment(&database, &subject, &[5]).await;
     let current = load::<Counting<1>>(&store, &subject).await;
 
     assert_eq!(current.0.total, 12);
@@ -139,10 +147,11 @@ async fn reads_only_the_events_written_since() {
 
 #[tokio::test]
 async fn keeps_states_of_different_types_on_the_same_subject_apart() {
-    let store = cached(10).await;
+    let database = Database::start().await;
+    let store = cached(&database, 10).await;
     let subject = subject_for("cache-types");
 
-    increment(&subject, &[3, 4]).await;
+    increment(&database, &subject, &[3, 4]).await;
 
     assert_eq!(load::<Increments>(&store, &subject).await.0, 2);
     assert_eq!(load::<Counter>(&store, &subject).await.total, 7);
@@ -150,12 +159,13 @@ async fn keeps_states_of_different_types_on_the_same_subject_apart() {
 
 #[tokio::test]
 async fn keeps_the_states_of_different_subjects_apart() {
-    let store = cached(10).await;
+    let database = Database::start().await;
+    let store = cached(&database, 10).await;
     let first = format!("{}/first", subject_for("cache-subjects"));
     let second = format!("{}/second", subject_for("cache-subjects"));
 
-    increment(&first, &[3, 4]).await;
-    increment(&second, &[5]).await;
+    increment(&database, &first, &[3, 4]).await;
+    increment(&database, &second, &[5]).await;
 
     assert_eq!(load::<Counter>(&store, &first).await.total, 7);
     assert_eq!(load::<Counter>(&store, &second).await.total, 5);
@@ -163,12 +173,13 @@ async fn keeps_the_states_of_different_subjects_apart() {
 
 #[tokio::test]
 async fn caches_a_state_that_holds_a_vec() {
-    let store = cached(10).await;
+    let database = Database::start().await;
+    let store = cached(&database, 10).await;
     let subject = subject_for("cache-vec");
 
-    increment(&subject, &[3, 4]).await;
+    increment(&database, &subject, &[3, 4]).await;
     let _ = load::<History<2>>(&store, &subject).await;
-    increment(&subject, &[5]).await;
+    increment(&database, &subject, &[5]).await;
     let current = load::<History<2>>(&store, &subject).await;
 
     assert_eq!(current.0, [3, 4, 5]);
@@ -177,10 +188,11 @@ async fn caches_a_state_that_holds_a_vec() {
 
 #[tokio::test]
 async fn hands_out_a_clone_of_the_cached_state() {
-    let store = cached(10).await;
+    let database = Database::start().await;
+    let store = cached(&database, 10).await;
     let subject = subject_for("cache-clone");
 
-    increment(&subject, &[3]).await;
+    increment(&database, &subject, &[3]).await;
     let mut first = load::<History<3>>(&store, &subject).await;
     first.0[0] = 999;
     let second = load::<History<3>>(&store, &subject).await;
@@ -194,12 +206,13 @@ async fn hands_out_a_clone_of_the_cached_state() {
 
 #[tokio::test]
 async fn reads_an_evicted_subject_again() {
-    let store = cached(1).await;
+    let database = Database::start().await;
+    let store = cached(&database, 1).await;
     let first = format!("{}/first", subject_for("cache-evicted"));
     let second = format!("{}/second", subject_for("cache-evicted"));
 
-    increment(&first, &[1, 2]).await;
-    increment(&second, &[3]).await;
+    increment(&database, &first, &[1, 2]).await;
+    increment(&database, &second, &[3]).await;
     let _ = load::<Counting<4>>(&store, &first).await;
     let _ = load::<Counting<4>>(&store, &second).await;
     let current = load::<Counting<4>>(&store, &first).await;
@@ -210,14 +223,15 @@ async fn reads_an_evicted_subject_again() {
 
 #[tokio::test]
 async fn works_with_from_latest() {
-    let store = cached(10).await;
+    let database = Database::start().await;
+    let store = cached(&database, 10).await;
     let subject = subject_for("cache-from-latest");
 
-    increment(&subject, &[10]).await;
-    write_past_the_kit(&subject, Reset::EVENT_TYPE, json!({})).await;
-    increment(&subject, &[2]).await;
+    increment(&database, &subject, &[10]).await;
+    write_past_the_kit(&database, &subject, Reset::EVENT_TYPE, json!({})).await;
+    increment(&database, &subject, &[2]).await;
     let _ = load::<CountingFromLatest<5>>(&store, &subject).await;
-    increment(&subject, &[1]).await;
+    increment(&database, &subject, &[1]).await;
     let current = load::<CountingFromLatest<5>>(&store, &subject).await;
 
     assert_eq!(current.0.total, 3);
@@ -230,10 +244,11 @@ async fn works_with_from_latest() {
 
 #[tokio::test]
 async fn turns_the_cache_off_with_0_subjects() {
-    let store = cached(0).await;
+    let database = Database::start().await;
+    let store = cached(&database, 0).await;
     let subject = subject_for("cache-off");
 
-    increment(&subject, &[3, 4]).await;
+    increment(&database, &subject, &[3, 4]).await;
     let _ = load::<Counting<6>>(&store, &subject).await;
     let _ = load::<Counting<6>>(&store, &subject).await;
 
@@ -242,7 +257,8 @@ async fn turns_the_cache_off_with_0_subjects() {
 
 #[tokio::test]
 async fn sees_its_own_writes_when_executing() {
-    let store = cached(10).await;
+    let database = Database::start().await;
+    let store = cached(&database, 10).await;
     let subject = subject_for("cache-execute");
 
     for _ in 0..2 {

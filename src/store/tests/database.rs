@@ -1,46 +1,77 @@
-//! A real EventSourcingDB in a container, which all tests of a run share, as
-//! the isolated database of ArchitectureKit for Go does. Every test writes to
-//! subjects of its own, so the tests do not see each other's events.
+//! A real EventSourcingDB in a container of a test's own, as the isolated
+//! database of ArchitectureKit for Go. The container stops once the test drops
+//! it, so nothing is left behind, which a container that all tests share would
+//! not manage: Rust never drops a static, and the client SDK for Rust has no
+//! reaper that removes containers once the tests have run.
+//!
+//! It runs with a signing key, unlike the database of the feature
+//! `testcontainers`, so that its events can be verified by their signatures.
 
 use std::{
     process,
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use ed25519_dalek::VerifyingKey;
 use eventsourcingdb::{Client, container::Container};
-use tokio::sync::OnceCell;
 
-static CONTAINER: OnceCell<Container> = OnceCell::const_new();
+use crate::{Store, StoreBuilder};
 
-/// Returns the shared container, which starts on first use, with the image tag
-/// that `EVENTSOURCINGDB_IMAGE_TAG` names, as the client SDK reads it, and with
-/// a signing key, so that its events can be verified by their signatures.
-pub(super) async fn container() -> &'static Container {
-    CONTAINER
-        .get_or_init(|| async {
-            let image_tag =
-                std::env::var("EVENTSOURCINGDB_IMAGE_TAG").unwrap_or_else(|_| "latest".to_owned());
+/// The source of every event the tests write.
+pub(super) const SOURCE: &str = "https://thenativeweb.io";
 
-            Container::builder()
-                .with_image_tag(&image_tag)
-                .with_signing_key()
-                .start()
-                .await
-                .expect("the database starts")
-        })
-        .await
+pub(super) struct Database {
+    container: Container,
 }
 
-/// Returns a client of the shared database.
-pub(super) async fn client() -> Client {
-    container()
-        .await
-        .get_client()
-        .await
-        .expect("the database has a client")
+impl Database {
+    /// Starts a database, with the image tag that `EVENTSOURCINGDB_IMAGE_TAG`
+    /// names, as the client SDK reads it.
+    pub(super) async fn start() -> Self {
+        let image_tag =
+            std::env::var("EVENTSOURCINGDB_IMAGE_TAG").unwrap_or_else(|_| "latest".to_owned());
+
+        let container = Container::builder()
+            .with_image_tag(&image_tag)
+            .with_signing_key()
+            .start()
+            .await
+            .expect("the database starts");
+
+        Self { container }
+    }
+
+    pub(super) async fn client(&self) -> Client {
+        self.container
+            .get_client()
+            .await
+            .expect("the database has a client")
+    }
+
+    pub(super) fn verification_key(&self) -> VerifyingKey {
+        *self
+            .container
+            .get_verification_key()
+            .expect("the database has a signing key")
+    }
+
+    /// Returns a store on the database that writes events with the source of
+    /// the tests.
+    pub(super) async fn store(&self) -> Store {
+        self.store_with(|builder| builder).await
+    }
+
+    /// Returns a store on the database, built as the function says.
+    pub(super) async fn store_with(
+        &self,
+        build: impl FnOnce(StoreBuilder) -> StoreBuilder,
+    ) -> Store {
+        build(Store::builder(self.client().await, SOURCE)).build()
+    }
 }
 
-/// Returns a subject that no other test writes to, below the given name.
+/// Returns a subject below the given name that no other test writes to, which
+/// keeps the tests apart in case two of them share a database after all.
 pub(super) fn subject_for(name: &str) -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);
 

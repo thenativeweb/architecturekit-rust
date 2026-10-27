@@ -7,10 +7,10 @@
 // write and execute share, and of the state cache are in the modules execute,
 // conflict_retries, failed_writes and state_cache.
 //
-// The answers of the database come either from a real EventSourcingDB, which
-// all tests share (see database), or from a fake that answers the routes a
-// test gives it as the test tells it (see fake), since the client SDK does not
-// let a test make the error of an answer itself.
+// The answers of the database come either from a real EventSourcingDB in a
+// container of each test's own (see database), or from a fake that answers the
+// routes a test gives it as the test tells it (see fake), since the client SDK
+// does not let a test make the error of an answer itself.
 
 mod commands;
 mod conflict_retries;
@@ -30,7 +30,7 @@ use crate::{
     RegisterSchemasError, State, Store, SubjectScheme, Transient, WriteError,
 };
 
-use database::subject_for;
+use database::{Database, subject_for};
 use fake::{Api, Reply, refusing};
 
 #[derive(Debug, Serialize, Deserialize, Event)]
@@ -95,10 +95,6 @@ impl State for CounterFromLatest {
     }
 }
 
-async fn store() -> Store {
-    Store::builder(database::client().await, "https://thenativeweb.io").build()
-}
-
 async fn write_unconditionally(store: &Store, events: Vec<EventOn>) {
     let _ = store
         .write(events, vec![Precondition::unconditionally()])
@@ -110,7 +106,8 @@ async fn write_unconditionally(store: &Store, events: Vec<EventOn>) {
 
 #[tokio::test]
 async fn loads_the_state_of_a_subject_from_its_events() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("loads");
 
     write_unconditionally(
@@ -128,7 +125,9 @@ async fn loads_the_state_of_a_subject_from_its_events() {
 
 #[tokio::test]
 async fn loads_a_pristine_subject_as_the_default_state() {
-    let counter: Counter = store()
+    let counter: Counter = Database::start()
+        .await
+        .store()
         .await
         .load(&subject_for("pristine"))
         .await
@@ -139,7 +138,8 @@ async fn loads_a_pristine_subject_as_the_default_state() {
 
 #[tokio::test]
 async fn loads_a_subject_with_an_ignored_event() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("ignored");
 
     write_unconditionally(
@@ -162,7 +162,8 @@ async fn loads_a_subject_with_an_ignored_event() {
 
 #[tokio::test]
 async fn fails_permanently_on_an_event_the_state_has_no_rule_for() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("no-rule");
 
     write_unconditionally(&store, vec![EventOn::new(&subject, &Unrelated {})]).await;
@@ -180,7 +181,8 @@ async fn fails_permanently_on_an_event_the_state_has_no_rule_for() {
 
 #[tokio::test]
 async fn reads_from_the_latest_event_of_that_type() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("from-latest");
 
     // The counter has no rule for the first event, so reading it would fail.
@@ -206,7 +208,8 @@ async fn reads_from_the_latest_event_of_that_type() {
 
 #[tokio::test]
 async fn reads_everything_if_the_type_is_missing() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("from-latest-missing");
 
     write_unconditionally(
@@ -226,13 +229,11 @@ async fn reads_everything_if_the_type_is_missing() {
 
 #[tokio::test]
 async fn verifies_the_signatures_of_the_events_it_reads() {
-    let container = database::container().await;
-    let key = *container
-        .get_verification_key()
-        .expect("the database signs its events");
-    let store = Store::builder(database::client().await, "https://thenativeweb.io")
-        .signature_verification(key)
-        .build();
+    let database = Database::start().await;
+    let key = database.verification_key();
+    let store = database
+        .store_with(|builder| builder.signature_verification(key))
+        .await;
     let subject = subject_for("signed");
 
     write_unconditionally(&store, vec![EventOn::new(&subject, &Incremented { by: 1 })]).await;
@@ -244,9 +245,10 @@ async fn verifies_the_signatures_of_the_events_it_reads() {
 #[tokio::test]
 async fn refuses_an_event_whose_signature_does_not_match_the_key() {
     let other_key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key();
-    let store = Store::builder(database::client().await, "https://thenativeweb.io")
-        .signature_verification(other_key)
-        .build();
+    let database = Database::start().await;
+    let store = database
+        .store_with(|builder| builder.signature_verification(other_key))
+        .await;
     let subject = subject_for("signed-otherwise");
 
     write_unconditionally(&store, vec![EventOn::new(&subject, &Incremented { by: 1 })]).await;
@@ -279,7 +281,8 @@ fn refuses_to_skip_hashes_while_checking_signatures() {
 
 #[tokio::test]
 async fn writes_events_to_several_subjects_at_once() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let first = subject_for("several-first");
     let second = subject_for("several-second");
 
@@ -305,7 +308,8 @@ async fn writes_events_to_several_subjects_at_once() {
 
 #[tokio::test]
 async fn reports_a_precondition_that_did_not_hold_as_a_conflict_and_writes_nothing() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("conflict");
 
     write_unconditionally(&store, vec![EventOn::new(&subject, &Incremented { by: 1 })]).await;
@@ -330,7 +334,8 @@ async fn reports_a_precondition_that_did_not_hold_as_a_conflict_and_writes_nothi
 
 #[tokio::test]
 async fn refuses_the_preconditions_of_a_write_before_writing() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("refused-preconditions");
 
     for (name, preconditions, message) in [
@@ -377,7 +382,8 @@ async fn refuses_the_preconditions_of_a_write_before_writing() {
 
 #[tokio::test]
 async fn refuses_an_event_id_that_is_not_a_revision_without_writing() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("not-a-revision");
 
     let failure = store
@@ -402,7 +408,8 @@ async fn refuses_an_event_id_that_is_not_a_revision_without_writing() {
 
 #[tokio::test]
 async fn writes_nothing_for_no_events_but_checks_the_preconditions_first() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
 
     let written = store
         .write(vec![], vec![Precondition::unconditionally()])
@@ -419,7 +426,9 @@ async fn writes_nothing_for_no_events_but_checks_the_preconditions_first() {
 
 #[tokio::test]
 async fn refuses_an_event_without_a_subject() {
-    let failure = store()
+    let failure = Database::start()
+        .await
+        .store()
         .await
         .write(
             vec![EventOn::new("", &Incremented { by: 1 })],
@@ -449,7 +458,8 @@ impl crate::Schema for (i32, i32) {
 
 #[tokio::test]
 async fn refuses_an_event_whose_data_can_not_be_encoded_without_writing() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let subject = subject_for("unencodable");
 
     // serde_json writes the keys of a map as strings, which a tuple is not.
@@ -481,7 +491,8 @@ async fn refuses_an_event_whose_data_can_not_be_encoded_without_writing() {
 
 #[tokio::test]
 async fn agrees_with_the_database_on_every_character() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let base = subject_for("characters");
     let scheme = SubjectScheme::new(&format!("{base}/{{value}}"));
 
@@ -591,7 +602,8 @@ struct Registered {
 
 #[tokio::test]
 async fn registers_the_schemas_of_events_and_checks_them_on_every_start() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
     let schemas = || [crate::EventSchema::of::<Registered>()];
 
     store
@@ -606,7 +618,8 @@ async fn registers_the_schemas_of_events_and_checks_them_on_every_start() {
 
 #[tokio::test]
 async fn fails_permanently_for_a_schema_that_differs_from_the_registered_one() {
-    let store = store().await;
+    let database = Database::start().await;
+    let store = database.store().await;
 
     store
         .register_schemas([crate::EventSchema::of::<Titled>()])
@@ -632,7 +645,9 @@ async fn fails_permanently_for_a_schema_that_differs_from_the_registered_one() {
 
 #[tokio::test]
 async fn refuses_two_different_schemas_for_the_same_event_type() {
-    let failure = store()
+    let failure = Database::start()
+        .await
+        .store()
         .await
         .register_schemas([
             crate::EventSchema::of::<Titled>(),
@@ -649,7 +664,9 @@ async fn refuses_two_different_schemas_for_the_same_event_type() {
 
 #[tokio::test]
 async fn registers_the_same_schema_given_twice_once() {
-    store()
+    Database::start()
+        .await
+        .store()
         .await
         .register_schemas([
             crate::EventSchema::of::<Registered>(),

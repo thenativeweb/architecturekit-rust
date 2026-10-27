@@ -27,9 +27,8 @@ use tokio::sync::Notify;
 use super::{
     Counter, CounterEvent, Incremented, cause_of,
     commands::{Increment, SOURCE, counter_decider, interfering, total_in},
-    database::{self, subject_for},
+    database::{Database, subject_for},
     fake::{Answer, Api, Fake, Reply},
-    store,
 };
 use crate::{
     Decider, DomainError, EventOn, ExecuteError, Failure, Permanent, Precondition, Store,
@@ -39,10 +38,10 @@ use crate::{
 
 const V2_WRITE_EVENTS: &str = "/api/v2/data/write-events";
 
-async fn retrying(retries: usize) -> Store {
-    Store::builder(database::client().await, SOURCE)
-        .conflict_retries(retries)
-        .build()
+async fn retrying(database: &Database, retries: usize) -> Store {
+    database
+        .store_with(|builder| builder.conflict_retries(retries))
+        .await
 }
 
 /// Asserts that executing reported a conflict after the given number of
@@ -87,9 +86,10 @@ fn assert_decisions_by_api(
 
 #[tokio::test]
 async fn decides_again_on_a_conflict_and_writes_then() {
-    let store = retrying(2).await;
+    let database = Database::start().await;
+    let store = retrying(&database, 2).await;
     let subject = subject_for("retries-writes");
-    let (decider, decisions) = interfering(1).await;
+    let (decider, decisions) = interfering(&database, 1).await;
 
     let written = store
         .execute(&decider, Increment::new(&subject, 1).on_state_read())
@@ -107,9 +107,10 @@ async fn decides_again_on_a_conflict_and_writes_then() {
 
 #[tokio::test]
 async fn decides_on_the_new_state() {
-    let (decider, decisions) = interfering(1).await;
+    let database = Database::start().await;
+    let (decider, decisions) = interfering(&database, 1).await;
 
-    let failure = retrying(2)
+    let failure = retrying(&database, 2)
         .await
         .execute(
             &decider,
@@ -126,9 +127,10 @@ async fn decides_on_the_new_state() {
 
 #[tokio::test]
 async fn reports_the_conflict_once_the_retries_are_used_up() {
-    let (decider, decisions) = interfering(10).await;
+    let database = Database::start().await;
+    let (decider, decisions) = interfering(&database, 10).await;
 
-    let failure = retrying(2)
+    let failure = retrying(&database, 2)
         .await
         .execute(
             &decider,
@@ -150,9 +152,11 @@ async fn reports_the_conflict_once_the_retries_are_used_up() {
 
 #[tokio::test]
 async fn reports_a_conflict_right_away_without_retries() {
-    let (decider, decisions) = interfering(1).await;
+    let database = Database::start().await;
+    let (decider, decisions) = interfering(&database, 1).await;
 
-    let failure = store()
+    let failure = database
+        .store()
         .await
         .execute(
             &decider,
@@ -170,7 +174,8 @@ async fn reports_a_conflict_right_away_without_retries() {
 
 #[tokio::test]
 async fn never_decides_again_on_a_revision_the_caller_hands_over() {
-    let store = retrying(2).await;
+    let database = Database::start().await;
+    let store = retrying(&database, 2).await;
     let subject = subject_for("retries-revision");
 
     let seeded = store
@@ -178,7 +183,7 @@ async fn never_decides_again_on_a_revision_the_caller_hands_over() {
         .await
         .expect("the command is executed");
 
-    let (decider, decisions) = interfering(1).await;
+    let (decider, decisions) = interfering(&database, 1).await;
     let failure = store
         .execute(
             &decider,
@@ -197,7 +202,8 @@ async fn never_decides_again_on_a_revision_the_caller_hands_over() {
 #[tokio::test]
 async fn reports_an_outdated_revision_of_the_caller_next_to_on_state_read_at_once_through_the_v2_api()
  {
-    let store = retrying(2).await;
+    let database = Database::start().await;
+    let store = retrying(&database, 2).await;
     let subject = subject_for("retries-outdated");
 
     let seeded = store
@@ -212,7 +218,7 @@ async fn reports_an_outdated_revision_of_the_caller_next_to_on_state_read_at_onc
     // The decider never interferes, so on_state_read holds every time, and
     // only the revision of the caller, which the second event outdated, does
     // not.
-    let (decider, decisions) = interfering(0).await;
+    let (decider, decisions) = interfering(&database, 0).await;
     let (on, outdated) = (subject.clone(), seeded[0].id().to_owned());
     let failure = store
         .execute(
@@ -234,7 +240,8 @@ async fn reports_an_outdated_revision_of_the_caller_next_to_on_state_read_at_onc
 #[tokio::test]
 async fn reports_a_precondition_made_with_require_next_to_on_state_read_at_once_through_the_v2_api()
 {
-    let store = retrying(2).await;
+    let database = Database::start().await;
+    let store = retrying(&database, 2).await;
     let subject = subject_for("retries-required");
 
     let _ = store
@@ -246,7 +253,7 @@ async fn reports_a_precondition_made_with_require_next_to_on_state_read_at_once_
     // an ISBN not to be taken, so deciding again can not make it hold.
     let query =
         format!("FROM e IN events WHERE e.subject == '{subject}' PROJECT INTO COUNT() == 0");
-    let (decider, decisions) = interfering(0).await;
+    let (decider, decisions) = interfering(&database, 0).await;
     let failure = store
         .execute(
             &decider,
@@ -269,7 +276,8 @@ async fn reports_a_precondition_made_with_require_next_to_on_state_read_at_once_
 #[tokio::test]
 async fn decides_again_through_either_api_if_on_state_read_did_not_hold_among_preconditions_on_several_subjects_that_hold()
  {
-    let store = retrying(2).await;
+    let database = Database::start().await;
+    let store = retrying(&database, 2).await;
     let subject = subject_for("retries-several");
     let other = format!("{subject}/other");
 
@@ -284,7 +292,7 @@ async fn decides_again_through_either_api_if_on_state_read_did_not_hold_among_pr
 
     // on_state_read is checked as the same kind as on_event_id, since the
     // subject has an event, and the two are told apart by their index.
-    let (decider, decisions) = interfering(1).await;
+    let (decider, decisions) = interfering(&database, 1).await;
     let on_other = on_other[0].id().to_owned();
     let written = store
         .execute(
@@ -312,7 +320,8 @@ async fn decides_again_through_either_api_if_on_state_read_did_not_hold_among_pr
 #[tokio::test]
 async fn uses_up_the_retries_through_either_api_if_on_state_read_does_not_hold_among_other_preconditions()
  {
-    let store = retrying(2).await;
+    let database = Database::start().await;
+    let store = retrying(&database, 2).await;
     let subject = subject_for("retries-among-others");
 
     let _ = store
@@ -320,7 +329,7 @@ async fn uses_up_the_retries_through_either_api_if_on_state_read_does_not_hold_a
         .await
         .expect("the command is executed");
 
-    let (decider, decisions) = interfering(10).await;
+    let (decider, decisions) = interfering(&database, 10).await;
     let on = subject.clone();
     let failure = store
         .execute(
@@ -340,6 +349,7 @@ async fn uses_up_the_retries_through_either_api_if_on_state_read_does_not_hold_a
 
 #[tokio::test]
 async fn decides_again_only_if_the_database_names_on_state_read_or_no_precondition() {
+    let database = Database::start().await;
     for (name, details, expected) in [
         ("on_state_read", json!({ "precondition": 0 }), 3),
         (
@@ -371,7 +381,7 @@ async fn decides_again_only_if_the_database_names_on_state_read_or_no_preconditi
             .client()
             .await;
         let store = Store::builder(client, SOURCE).conflict_retries(2).build();
-        let (decider, decisions) = interfering(0).await;
+        let (decider, decisions) = interfering(&database, 0).await;
 
         let failure = store
             .execute(
@@ -409,7 +419,8 @@ async fn decides_again_only_if_the_database_names_on_state_read_or_no_preconditi
 
 #[tokio::test]
 async fn stops_deciding_once_the_future_is_dropped() {
-    let store = retrying(2).await;
+    let database = Database::start().await;
+    let store = retrying(&database, 2).await;
     let subject = subject_for("retries-dropped");
     let decisions = Arc::new(AtomicUsize::new(0));
     let deciding = Arc::new(Notify::new());
