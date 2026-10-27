@@ -14,3 +14,23 @@
     unsafe_code,
     warnings
 )]
+
+// The derive macros name the crate as ::architecturekit, which this makes
+// work within the crate's own tests as well.
+#[cfg(test)]
+extern crate self as architecturekit;
+
+mod event;
+#[cfg(doctest)]
+mod refusals;
+mod schema;
+
+pub use event::Event;
+pub use schema::Schema;
+
+#[cfg(feature = "derive")]
+pub use architecturekit_macros::{Event, Schema};
+
+#[doc(hidden)]
+#[path = "private.rs"]
+pub mod __private;

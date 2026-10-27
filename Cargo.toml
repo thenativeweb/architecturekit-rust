@@ -1,11 +1,21 @@
-[package]
-name = "architecturekit"
+[workspace]
+members = ["architecturekit-macros"]
+
+[workspace.package]
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Building blocks for DDD-based applications with CQRS and event sourcing, on top of the EventSourcingDB by the native web."
 repository = "https://github.com/thenativeweb/architecturekit-rust"
 license = "MIT"
+
+[package]
+name = "architecturekit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Building blocks for DDD-based applications with CQRS and event sourcing, on top of the EventSourcingDB by the native web."
+repository.workspace = true
+license.workspace = true
 keywords = [
   "cqrs",
   "ddd",
@@ -14,3 +24,17 @@ keywords = [
   "eventsourcingdb",
 ]
 categories = ["database"]
+
+[features]
+default = ["derive"]
+derive = ["dep:architecturekit-macros"]
+
+[dependencies]
+architecturekit-macros = { path = "architecturekit-macros", version = "=0.0.0", optional = true }
+chrono = { version = "0.4.45", default-features = false }
+serde = "1.0.229"
+serde_json = "1.0.154"
+
+[dev-dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }

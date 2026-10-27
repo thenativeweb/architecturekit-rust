@@ -61,7 +61,9 @@ jobs:
         if: ${{ steps.get_next_version.outputs.hasNextVersion == 'true' }}
         run: |
           cargo install cargo-edit
-          cargo set-version ${{ steps.get_next_version.outputs.version }}
+          # Both crates share the version, and architecturekit requires exactly
+          # its own version of architecturekit-macros, which this updates too.
+          cargo set-version --workspace ${{ steps.get_next_version.outputs.version }}
           git config --global user.email "hello@thenativeweb.io"
           git config --global user.name "${{ github.actor }}"
           git add .
@@ -77,5 +79,7 @@ jobs:
         if: ${{ steps.get_next_version.outputs.hasNextVersion == 'true' }}
         run: |
           echo "${{ secrets.TOKEN_GITHUB_TO_CRATES_RW }}" | cargo login
-          cargo package
-          cargo publish
+          # architecturekit depends on architecturekit-macros, so the macros
+          # have to be on crates.io first.
+          cargo publish --package architecturekit-macros
+          cargo publish --package architecturekit
