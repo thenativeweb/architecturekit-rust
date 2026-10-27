@@ -36,6 +36,7 @@ mod subject;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod upcast;
+mod view;
 
 pub use command::{Command, Precondition, PreconditionsError, check_preconditions};
 pub use decider::Decider;
@@ -50,7 +51,10 @@ pub use read::{
     EmptyRange, IfLatestEventIsMissing, LowerBound, Order, ReadOptions, ReadOptionsError, Subjects,
     UpperBound, check_read_options,
 };
-pub use revision::{NotARevision, compare_revisions, parse_revision};
+pub use revision::{
+    NotARevision, NotCaughtUp, Revisioned, compare_revisions, parse_revision, revision_of,
+    wait_for_written,
+};
 pub use schema::Schema;
 pub use state::{EventSchema, Events, State, replay, replay_stored, step, step_stored};
 pub use store::{
@@ -59,6 +63,7 @@ pub use store::{
 };
 pub use subject::{SubjectScheme, SubjectValuesError};
 pub use upcast::{UpcastEvent, Upcasters};
+pub use view::{InMemoryIndex, InMemoryView, Outcome, ViewError};
 
 /// Stops a run of a projection from outside, as a `context.Context` does in
 /// ArchitectureKit for Go (see [`Store::start_projection`]).

@@ -22,6 +22,7 @@ mod projections;
 mod read;
 mod runs;
 mod state_cache;
+mod views;
 
 use std::{collections::HashMap, error::Error};
 
