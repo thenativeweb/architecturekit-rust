@@ -5,6 +5,7 @@
 //! one connection after the other, which is enough for the requests of a test.
 
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -97,6 +98,10 @@ pub(super) enum Answer {
     CutOff(Reply),
     /// Answers nothing for the given time, and then hangs up.
     Stall(Duration),
+    /// Answers the first request as the first answer says, the second one as
+    /// the second says, and so on, and every request after the last answer as
+    /// the last one says.
+    InTurn(Vec<Answer>),
 }
 
 /// A fake that is about to start.
@@ -104,6 +109,7 @@ pub(super) enum Answer {
 pub(super) struct Fake {
     api: Api,
     routes: Vec<(&'static str, Answer)>,
+    turns: Mutex<HashMap<String, usize>>,
     vanishes_after: Option<&'static str>,
 }
 
@@ -114,6 +120,7 @@ impl Fake {
             api,
             routes: Vec::new(),
             vanishes_after: None,
+            turns: Mutex::default(),
         }
     }
 
@@ -213,6 +220,7 @@ impl Fake {
                 tokio::time::sleep(duration).await;
                 return Some(path);
             }
+            Answer::InTurn(_) => unreachable!("answer_to resolves the turn"),
         };
 
         let _ = connection.write_all(head_of(&reply).as_bytes()).await;
@@ -234,7 +242,16 @@ impl Fake {
         }
 
         if let Some((_, answer)) = self.routes.iter().find(|(route, _)| *route == path) {
-            return answer.clone();
+            let Answer::InTurn(answers) = answer else {
+                return answer.clone();
+            };
+
+            let mut turns = self.turns.lock().expect("the turns are not poisoned");
+            let turn = turns.entry(path.to_owned()).or_default();
+            let answer = answers[(*turn).min(answers.len() - 1)].clone();
+            *turn += 1;
+
+            return answer;
         }
 
         Answer::Reply(match self.api {
