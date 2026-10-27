@@ -122,6 +122,7 @@ where
             },
         )
         .await?;
+        projection.seen(event.id());
         self.last_applied = Some(event.id().to_owned());
 
         Ok(())
@@ -192,6 +193,7 @@ where
             },
         )
         .await?;
+        projection.seen(event.id());
         self.last_applied = Some(event.id().to_owned());
 
         Ok(())
