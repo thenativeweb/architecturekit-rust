@@ -25,6 +25,7 @@ use crate::{
 mod any;
 mod error;
 mod failure;
+mod projecting;
 mod state_cache;
 #[cfg(test)]
 mod tests;

@@ -24,6 +24,7 @@ mod command;
 mod decider;
 mod error;
 mod event;
+mod projection;
 mod read;
 #[cfg(doctest)]
 mod refusals;
@@ -40,6 +41,10 @@ pub use command::{Command, Precondition, PreconditionsError, check_preconditions
 pub use decider::Decider;
 pub use error::{Categorized, Category, DomainError, Failure, Permanent, Transient};
 pub use event::Event;
+pub use projection::{
+    Envelope, Projected, Projection, ProjectionError, ResumableProjection, Transaction,
+    TransactionalProjection,
+};
 pub use read::{
     EmptyRange, IfLatestEventIsMissing, LowerBound, Order, ReadOptions, ReadOptionsError, Subjects,
     UpperBound, check_read_options,
