@@ -240,10 +240,12 @@ where
     }
 
     /// Records an event as processed, which moves the revision of the view
-    /// on, and wakes up the readers waiting for it (see [`Revisioned`]).
-    /// Events may arrive more than once and out of order after a restart, so
-    /// an event the view has already passed does not move the revision
-    /// backwards, and an ID that is not a revision is ignored.
+    /// on, and wakes up the readers waiting for it (see [`Revisioned`]). A
+    /// projection calls it from [`Projection::seen`](crate::Projection::seen)
+    /// for every event it has seen, also for one it ignores. Events may
+    /// arrive more than once and out of order after a restart, so an event
+    /// the view has already passed does not move the revision backwards, and
+    /// an ID that is not a revision is ignored.
     pub fn seen(&self, event_id: &str) {
         let Ok(number) = parse_revision(event_id) else {
             return;

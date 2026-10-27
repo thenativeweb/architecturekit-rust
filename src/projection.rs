@@ -176,6 +176,76 @@ pub trait Projection: Send + Sync + 'static {
     fn upcasters() -> Option<&'static Upcasters> {
         None
     }
+
+    /// Records that the projection has seen a stored event, once it has
+    /// applied every event an upcaster split it into. The default does
+    /// nothing.
+    ///
+    /// A projection that writes to views records the event in each of them,
+    /// so that a reader can wait until they have caught up (see
+    /// [`Revisioned`](crate::Revisioned)):
+    ///
+    /// ```
+    /// use architecturekit::{Envelope, Event, Events, InMemoryView, Projection, ViewError};
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Debug, Serialize, Deserialize, Event)]
+    /// #[event(type = "io.thenativeweb.library.book-acquired")]
+    /// struct BookAcquired {
+    ///     id: String,
+    ///     title: String,
+    /// }
+    ///
+    /// #[derive(Debug, Events)]
+    /// enum BookEvent {
+    ///     Acquired(BookAcquired),
+    /// }
+    ///
+    /// #[derive(Clone, Debug, Default)]
+    /// struct Book {
+    ///     id: String,
+    ///     title: String,
+    /// }
+    ///
+    /// struct BookList {
+    ///     books: InMemoryView<String, Book>,
+    /// }
+    ///
+    /// impl Projection for BookList {
+    ///     type Event = BookEvent;
+    ///     type Error = ViewError;
+    ///
+    ///     async fn apply(&self, event: Envelope<BookEvent>) -> Result<(), ViewError> {
+    ///         let BookEvent::Acquired(acquired) = &event.data;
+    ///         let book = Book {
+    ///             id: acquired.id.clone(),
+    ///             title: acquired.title.clone(),
+    ///         };
+    ///         self.books.insert(&event, book)?;
+    ///
+    ///         Ok(())
+    ///     }
+    ///
+    ///     fn seen(&self, event_id: &str) {
+    ///         self.books.seen(event_id);
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// It is called for every stored event that reaches the projection, also
+    /// for one of a type the projection has no variant for, and that is the
+    /// point: a projection skips what does not concern it, but a reader may
+    /// be waiting for exactly that event. A view whose revision only counted
+    /// the events it applied would leave such a reader waiting. It is not
+    /// called for an event that failed, and it is called before the
+    /// checkpoint of a batch is saved.
+    ///
+    /// A [`TransactionalProjection`] has no such method, since where data and
+    /// revision have to become durable together, the revision belongs inside
+    /// the transaction, and the projection writes it itself.
+    fn seen(&self, event_id: &str) {
+        let _ = event_id;
+    }
 }
 
 /// A projection whose target can hold a checkpoint, but not together with the

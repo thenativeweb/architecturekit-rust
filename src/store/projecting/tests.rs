@@ -6,23 +6,31 @@
 // single function, as ProjectionFunc makes one in Go, needs the types of its
 // events and its error in Rust, so it is an ordinary type there.
 //
+// They also mirror the tests of TestTracking that concern what a projection
+// records as seen, which Projection::seen does in Rust rather than a wrapper
+// around the projection. Since it is a method of the trait, what Go checks
+// about wrapping is left to the compiler: a projection keeps its kind and its
+// batch size, a transactional one has no such method, and nothing can be nil.
+//
 // The projections of the tests yield before they do anything, as a real one
 // waits for its target, which lets other tasks run in the meantime.
 
 use std::{
     fmt,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use eventsourcingdb::{error::ClientError, request_options::BoundType};
-use futures_util::stream;
+use futures_util::{FutureExt, stream};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use super::{RebuildWriter, ResumableWriter, TransactionalWriter, Writer, bound_after, drive};
 use crate::{
-    Categorized, Category, Envelope, Failure, Permanent, Projection, ProjectionError,
-    ResumableProjection, Transaction, TransactionalProjection, projection::tests::stored,
+    Categorized, Category, Envelope, Event, Events, Failure, InMemoryView, Permanent, Projection,
+    ProjectionError, ResumableProjection, Revisioned, Transaction, TransactionalProjection,
+    UpcastEvent, Upcasters, projection::tests::stored,
 };
 
 /// What the projection of a test was asked to do, in order.
@@ -630,4 +638,242 @@ fn excludes_the_checkpoint_from_the_events_read() {
     assert_eq!(bound.id, "7");
     assert!(matches!(bound.bound_type, BoundType::Exclusive));
     assert!(bound_after(None).is_none());
+}
+
+#[derive(Debug, Serialize, Deserialize, Event)]
+#[event(type = "io.thenativeweb.test.incremented")]
+struct Incremented {
+    by: i64,
+}
+
+/// The events of a counter, which leave out every other type.
+#[derive(Debug, Events)]
+enum Counted {
+    Incremented(Incremented),
+}
+
+/// An older version of the counter wrote two increments as one event, which
+/// the upcasters split.
+const INCREMENTED_TWICE: &str = "io.thenativeweb.test.incremented-twice";
+
+static SPLITTING: LazyLock<Upcasters> = LazyLock::new(|| {
+    Upcasters::new().upcast(INCREMENTED_TWICE, |event| {
+        Ok::<_, serde_json::Error>(vec![
+            UpcastEvent::clone(&event).with_type(Incremented::EVENT_TYPE),
+            event.with_type(Incremented::EVENT_TYPE),
+        ])
+    })
+});
+
+/// A projection of counters that records what it applies, part by part, and
+/// what it has seen, and refuses the event a test names.
+#[derive(Default)]
+struct Seeing {
+    log: Log,
+    refuses: Option<&'static str>,
+}
+
+impl Projection for Seeing {
+    type Event = Counted;
+    type Error = Refused;
+
+    async fn apply(&self, event: Envelope<Counted>) -> Result<(), Refused> {
+        tokio::task::yield_now().await;
+        self.log.push(format!("apply {}/{}", event.id, event.part));
+        if self.refuses == Some(event.id.as_str()) {
+            return Err(Refused(Category::Domain));
+        }
+
+        Ok(())
+    }
+
+    fn upcasters() -> Option<&'static Upcasters> {
+        Some(&SPLITTING)
+    }
+
+    fn seen(&self, event_id: &str) {
+        self.log.push(format!("seen {event_id}"));
+    }
+}
+
+impl ResumableProjection for Seeing {
+    async fn checkpoint(&self) -> Result<Option<String>, Refused> {
+        tokio::task::yield_now().await;
+        Ok(None)
+    }
+
+    async fn save_checkpoint(&self, event_id: &str) -> Result<(), Refused> {
+        tokio::task::yield_now().await;
+        self.log.push(format!("save {event_id}"));
+
+        Ok(())
+    }
+}
+
+/// Drives the given stored events through the writer, and returns how it
+/// ended.
+async fn drive_stored<W: Writer>(
+    writer: &mut W,
+    events: Vec<eventsourcingdb::Event>,
+) -> Result<(), ProjectionError> {
+    drive(
+        writer,
+        stream::iter(events.into_iter().map(Ok)),
+        verified,
+        1,
+        &CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .1
+}
+
+fn incremented(id: &str) -> eventsourcingdb::Event {
+    stored(id, Incremented::EVENT_TYPE, json!({ "by": 1 }))
+}
+
+#[tokio::test]
+async fn records_every_event() {
+    let rebuilt = Seeing::default();
+    drive_stored(
+        &mut RebuildWriter::new(&rebuilt),
+        vec![incremented("0"), incremented("1")],
+    )
+    .await
+    .expect("the events are applied");
+
+    assert_eq!(
+        rebuilt.log.entries(),
+        ["apply 0/0", "seen 0", "apply 1/0", "seen 1"]
+    );
+
+    let resumed = Seeing::default();
+    drive_stored(
+        &mut ResumableWriter::new(&resumed),
+        vec![incremented("0"), incremented("1")],
+    )
+    .await
+    .expect("the events are applied");
+
+    assert_eq!(
+        resumed.log.entries(),
+        [
+            "apply 0/0",
+            "seen 0",
+            "save 0",
+            "apply 1/0",
+            "seen 1",
+            "save 1"
+        ],
+        "an event is recorded before its checkpoint is saved"
+    );
+}
+
+#[tokio::test]
+async fn also_records_what_the_projection_ignores() {
+    // This is the whole reason for seen: a projection skips what does not
+    // concern it, but a reader may be waiting for exactly that event.
+    let projection = Seeing::default();
+
+    drive_stored(
+        &mut RebuildWriter::new(&projection),
+        vec![stored("42", "io.thenativeweb.test.unrelated", json!({}))],
+    )
+    .await
+    .expect("the event is skipped");
+
+    assert_eq!(projection.log.entries(), ["seen 42"]);
+}
+
+#[tokio::test]
+async fn records_a_split_event_once_every_part_is_applied() {
+    // A reader that woke up after the first part could read an event that is
+    // applied only in half.
+    let projection = Seeing::default();
+
+    drive_stored(
+        &mut RebuildWriter::new(&projection),
+        vec![stored("5", INCREMENTED_TWICE, json!({ "by": 1 }))],
+    )
+    .await
+    .expect("the event is applied");
+
+    assert_eq!(
+        projection.log.entries(),
+        ["apply 5/0", "apply 5/1", "seen 5"]
+    );
+}
+
+#[tokio::test]
+async fn does_not_record_a_failed_event() {
+    let projection = Seeing {
+        refuses: Some("1"),
+        ..Seeing::default()
+    };
+
+    let result = drive_stored(
+        &mut RebuildWriter::new(&projection),
+        vec![incremented("0"), incremented("1")],
+    )
+    .await;
+
+    assert!(result.is_err(), "the event is refused");
+    assert_eq!(
+        projection.log.entries(),
+        ["apply 0/0", "seen 0", "apply 1/0"],
+        "recorded although applying failed"
+    );
+}
+
+/// A projection that writes to three views, and records what it has seen in
+/// each of them.
+struct Library {
+    books: InMemoryView<String, String>,
+    shelves: InMemoryView<String, String>,
+    readers: InMemoryView<String, String>,
+}
+
+impl Projection for Library {
+    type Event = Counted;
+    type Error = Refused;
+
+    async fn apply(&self, _: Envelope<Counted>) -> Result<(), Refused> {
+        tokio::task::yield_now().await;
+        Ok(())
+    }
+
+    fn seen(&self, event_id: &str) {
+        for view in [&self.books, &self.shelves, &self.readers] {
+            view.seen(event_id);
+        }
+    }
+}
+
+#[tokio::test]
+async fn records_every_event_in_every_view() {
+    let view = || InMemoryView::new(String::clone);
+    let projection = Library {
+        books: view(),
+        shelves: view(),
+        readers: view(),
+    };
+
+    drive_stored(
+        &mut RebuildWriter::new(&projection),
+        vec![incremented("3"), incremented("4")],
+    )
+    .await
+    .expect("the events are applied");
+
+    for (name, view) in [
+        ("books", &projection.books),
+        ("shelves", &projection.shelves),
+        ("readers", &projection.readers),
+    ] {
+        assert_eq!(
+            view.revision().now_or_never(),
+            Some(Ok(Some("4".to_owned()))),
+            "the view {name} has to record the events"
+        );
+    }
 }

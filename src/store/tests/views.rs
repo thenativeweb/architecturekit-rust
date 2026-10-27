@@ -1,10 +1,21 @@
 // These tests mirror the tests of TestRevisionIn of ArchitectureKit for Go
 // that need a database: the revision an item keeps fits a precondition on its
-// subject only if the item follows every event of it.
+// subject only if the item follows every event of it. They also mirror "resumes
+// from the checkpoint" of TestTracking, and "waits for what Execute wrote in a
+// view whose projection is tracked" of TestWaitForWritten, for a projection
+// that records what it has seen in its view.
+
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+use futures_util::FutureExt;
 
 use crate::{
-    Envelope, EventOn, ExecuteError, InMemoryView, Precondition, Projection, Subjects, Transient,
-    ViewError,
+    CancellationToken, Envelope, EventOn, ExecuteError, InMemoryView, Precondition, Projection,
+    ProjectionOptions, ResumableProjection, Revisioned, Subjects, Transient, ViewError,
+    wait_caught_up, wait_for_written,
 };
 
 use super::{
@@ -24,10 +35,29 @@ struct CounterItem {
 
 /// Keeps the total of every counter. If it follows resets, it handles them,
 /// which change nothing about the item, with a change that does nothing, so
-/// that the revision of the item follows the subject.
+/// that the revision of the item follows the subject. It records every event
+/// it has seen in its view, and keeps a checkpoint, if it is resumed.
 struct CounterItems {
     view: InMemoryView<String, CounterItem>,
     follows_resets: bool,
+    checkpoint: Mutex<Option<String>>,
+}
+
+impl CounterItems {
+    fn new(follows_resets: bool) -> Self {
+        Self {
+            view: InMemoryView::with_revision_in(
+                |item: &CounterItem| item.subject.clone(),
+                |item| &mut item.revision,
+            ),
+            follows_resets,
+            checkpoint: Mutex::new(None),
+        }
+    }
+
+    fn checkpoint(&self) -> Option<String> {
+        self.checkpoint.lock().expect("not poisoned").clone()
+    }
 }
 
 impl Projection for CounterItems {
@@ -49,6 +79,24 @@ impl Projection for CounterItems {
             }
             _ => {}
         }
+
+        Ok(())
+    }
+
+    fn seen(&self, event_id: &str) {
+        self.view.seen(event_id);
+    }
+}
+
+impl ResumableProjection for CounterItems {
+    async fn checkpoint(&self) -> Result<Option<String>, ViewError> {
+        tokio::task::yield_now().await;
+        Ok(CounterItems::checkpoint(self))
+    }
+
+    async fn save_checkpoint(&self, event_id: &str) -> Result<(), ViewError> {
+        tokio::task::yield_now().await;
+        *self.checkpoint.lock().expect("not poisoned") = Some(event_id.to_owned());
 
         Ok(())
     }
@@ -74,13 +122,7 @@ async fn project_increment_and_reset(
         .await
         .expect("the events are written");
 
-    let items = CounterItems {
-        view: InMemoryView::with_revision_in(
-            |item: &CounterItem| item.subject.clone(),
-            |item| &mut item.revision,
-        ),
-        follows_resets,
-    };
+    let items = CounterItems::new(follows_resets);
     store
         .catch_up_projection(&Subjects::exact(subject), &items)
         .await
@@ -143,4 +185,73 @@ async fn falls_behind_the_subject_if_the_projection_skips_an_event_of_it() {
         ),
         "a revision behind the subject has to conflict: {executed:?}"
     );
+}
+
+#[tokio::test]
+async fn resumes_from_the_checkpoint() {
+    let database = Database::start().await;
+    let store = database.store().await;
+    let subject = subject_for("seen-resumes");
+    let _ = store
+        .write(
+            (1..=3)
+                .map(|by| EventOn::new(&subject, &Incremented { by }))
+                .collect(),
+            vec![Precondition::unconditionally()],
+        )
+        .await
+        .expect("the events are written");
+
+    let items = CounterItems::new(true);
+    store
+        .catch_up_resumable_projection(&Subjects::exact(&subject), &items)
+        .await
+        .expect("the projection catches up");
+
+    let checkpoint = items.checkpoint();
+    assert!(
+        checkpoint.is_some(),
+        "a resumable projection has to save its checkpoint"
+    );
+    assert_eq!(
+        items.view.revision().now_or_never(),
+        Some(Ok(checkpoint)),
+        "the view has to have seen what the checkpoint says"
+    );
+}
+
+#[tokio::test]
+async fn waits_for_what_execute_wrote_in_a_view_whose_projection_records_what_it_has_seen() {
+    let database = Database::start().await;
+    let store = database.store().await;
+    let subject = subject_for("seen-execute");
+
+    let items = Arc::new(CounterItems::new(true));
+    let token = CancellationToken::new();
+    let run = store.start_projection(
+        Subjects::exact(&subject),
+        Arc::clone(&items),
+        token.clone(),
+        ProjectionOptions::default(),
+    );
+    tokio::time::timeout(Duration::from_secs(30), wait_caught_up(&[&run]))
+        .await
+        .expect("the projection catches up in time")
+        .expect("the projection catches up");
+
+    let written = store
+        .execute(&counter_decider(), Increment::new(&subject, 1))
+        .await
+        .expect("the command is executed");
+
+    let waited = wait_for_written(&items.view, &written, Duration::from_secs(5)).await;
+    assert!(matches!(waited, Ok(())), "{waited:?}");
+    assert_eq!(
+        items.view.wait_for(written[0].id()).now_or_never(),
+        Some(Ok(())),
+        "the view has to have seen the event"
+    );
+
+    token.cancel();
+    run.done().await;
 }
