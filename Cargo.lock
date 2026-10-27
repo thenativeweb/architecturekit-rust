@@ -36,7 +36,7 @@ dependencies = [
 
 [[package]]
 name = "architecturekit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "architecturekit-macros",
  "chrono",
@@ -47,7 +47,7 @@ dependencies = [
 
 [[package]]
 name = "architecturekit-macros"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
