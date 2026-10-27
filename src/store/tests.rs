@@ -401,7 +401,7 @@ async fn writes_nothing_for_no_events_but_checks_the_preconditions_first() {
         .write(vec![], vec![Precondition::unconditionally()])
         .await
         .expect("no events are nothing to write");
-    assert!(written.is_empty());
+    assert_eq!(written, Vec::new());
 
     let failure = store
         .write(vec![], vec![])
