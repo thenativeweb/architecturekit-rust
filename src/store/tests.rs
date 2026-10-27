@@ -3,9 +3,9 @@
 // write rather than through Execute, the tests of Write, of RegisterSchemas, of
 // the verification of signatures, of FromLatest and Ignore with a database,
 // and "agrees with the database on every character" of TestSubjectScheme. The
-// tests of Execute, its conflicts and its retries, and of failed writes, which
-// write and execute share, are in the modules execute, conflict_retries and
-// failed_writes. The state cache comes next.
+// tests of Execute, its conflicts and its retries, of failed writes, which
+// write and execute share, and of the state cache are in the modules execute,
+// conflict_retries, failed_writes and state_cache.
 //
 // The answers of the database come either from a real EventSourcingDB, which
 // all tests share (see database), or from a fake that answers the routes a
@@ -18,6 +18,7 @@ mod database;
 mod execute;
 mod failed_writes;
 mod fake;
+mod state_cache;
 
 use std::{collections::HashMap, error::Error};
 
