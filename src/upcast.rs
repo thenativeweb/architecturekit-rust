@@ -45,6 +45,18 @@ impl UpcastEvent {
         }
     }
 
+    /// Takes an event of the client SDK as stored, for the upcasters to see.
+    pub(crate) fn from_stored(event: &eventsourcingdb::Event) -> Self {
+        Self {
+            event_type: event.ty().to_owned(),
+            data: event.data().clone(),
+            subject: event.subject().to_owned(),
+            id: event.id().to_owned(),
+            time: *event.time(),
+            source: event.source().to_owned(),
+        }
+    }
+
     /// Returns the event with another type, as an upcaster does for the next
     /// version.
     #[must_use]

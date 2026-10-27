@@ -199,6 +199,50 @@ pub fn check_preconditions<C: Command + ?Sized>(command: &C) -> Result<(), Preco
     check(&command.preconditions(), any::type_name::<C>())
 }
 
+/// Checks the preconditions of a write the way [`check_preconditions`] checks
+/// those of a command, except that [`Precondition::on_state_read`] has nothing
+/// to refer to, and turns them into the ones the database checks, in their
+/// order, so that the index by which the database names a precondition that
+/// did not hold is the index of the given one.
+pub(crate) fn write_preconditions(
+    declared: Vec<Precondition>,
+) -> Result<Vec<eventsourcingdb::Precondition>, PreconditionsError> {
+    let refuse = |message: &str| {
+        Err(PreconditionsError::Permanent(Permanent::Other(
+            Failure::new(message, None),
+        )))
+    };
+
+    if declared.is_empty() {
+        return refuse(
+            "a write declares no preconditions, use Precondition::unconditionally to write without any",
+        );
+    }
+    if declared.iter().any(Precondition::is_on_state_read) {
+        return refuse(
+            "a write reads no state, so Precondition::on_state_read has nothing to guard, \
+             use on_pristine_subject, on_populated_subject, on_event_id, or require instead",
+        );
+    }
+    if declared.len() > 1 && declared.iter().any(Precondition::is_unconditional) {
+        return refuse("a write combines Precondition::unconditionally with other preconditions");
+    }
+
+    for precondition in &declared {
+        if let Kind::OnEventId { event_id, .. } = &precondition.kind {
+            let _ = parse_revision(event_id).map_err(PreconditionsError::NotARevision)?;
+        }
+    }
+
+    Ok(declared
+        .into_iter()
+        .filter_map(|precondition| match precondition.kind {
+            Kind::Required(database) | Kind::OnEventId { database, .. } => Some(database),
+            Kind::OnStateRead | Kind::Unconditionally => None,
+        })
+        .collect())
+}
+
 fn check(declared: &[Precondition], command: &str) -> Result<(), PreconditionsError> {
     let refuse = |message: String| {
         Err(PreconditionsError::Permanent(Permanent::Other(
