@@ -39,3 +39,4 @@ serde_json = "1.0.154"
 [dev-dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.52.3", features = ["macros", "rt"] }

@@ -121,6 +121,79 @@ pub struct Tag;
 /// ```
 pub struct Into;
 
+/// The events of a state are an enum, with one variant per event type:
+///
+/// ```compile_fail
+/// #[derive(architecturekit::Events)]
+/// struct BookEvent {
+///     title: String,
+/// }
+/// ```
+///
+/// And every variant holds exactly one event:
+///
+/// ```compile_fail
+/// #[derive(serde::Serialize, serde::Deserialize, architecturekit::Event)]
+/// #[event(type = "io.eventsourcingdb.library.book-acquired")]
+/// struct BookAcquired {
+///     title: String,
+/// }
+///
+/// #[derive(architecturekit::Events)]
+/// enum BookEvent {
+///     Acquired(BookAcquired),
+///     Lost,
+/// }
+/// ```
+///
+/// ```compile_fail
+/// #[derive(serde::Serialize, serde::Deserialize, architecturekit::Event)]
+/// #[event(type = "io.eventsourcingdb.library.book-acquired")]
+/// struct BookAcquired {
+///     title: String,
+/// }
+///
+/// #[derive(architecturekit::Events)]
+/// enum BookEvent {
+///     Acquired { event: BookAcquired },
+/// }
+/// ```
+pub struct EventsOfAState;
+
+/// Two variants of the same event type would make reading ambiguous:
+///
+/// ```compile_fail
+/// #[derive(serde::Serialize, serde::Deserialize, architecturekit::Event)]
+/// #[event(type = "io.eventsourcingdb.library.book-acquired")]
+/// struct BookAcquired {
+///     title: String,
+/// }
+///
+/// #[derive(serde::Serialize, serde::Deserialize, architecturekit::Event)]
+/// #[event(type = "io.eventsourcingdb.library.book-acquired")]
+/// struct BookBought {
+///     title: String,
+/// }
+///
+/// #[derive(architecturekit::Events)]
+/// enum BookEvent {
+///     Acquired(BookAcquired),
+///     Bought(BookBought),
+/// }
+/// ```
+pub struct DuplicateEventTypes;
+
+/// The variants of an enum of events name the event types of a state, so it
+/// can not be generic:
+///
+/// ```compile_fail
+/// #[derive(architecturekit::Events)]
+/// enum Wrapped<T: architecturekit::Event> {
+///     Event(T),
+/// }
+/// ```
+pub struct GenericEvents;
+
 /// A field needs a type that describes its schema:
 ///
 /// ```compile_fail,E0277
