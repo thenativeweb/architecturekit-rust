@@ -24,9 +24,11 @@ mod event;
 #[cfg(doctest)]
 mod refusals;
 mod schema;
+mod subject;
 
 pub use event::Event;
 pub use schema::Schema;
+pub use subject::{SubjectScheme, SubjectValuesError};
 
 #[cfg(feature = "derive")]
 pub use architecturekit_macros::{Event, Schema};
