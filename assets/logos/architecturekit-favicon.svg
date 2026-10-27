@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="11.557 3.695 76.886 89.488">
+  <defs>
+    <linearGradient id="block-1" gradientUnits="userSpaceOnUse" x1="55.49" y1="12.89" x2="79.39" y2="26.70"><stop offset="0" stop-color="#8ee7fb"/><stop offset="1" stop-color="#28b5ec"/></linearGradient>
+    <linearGradient id="block-2" gradientUnits="userSpaceOnUse" x1="79.88" y1="35.16" x2="79.88" y2="64.84"><stop offset="0" stop-color="#23aaea"/><stop offset="1" stop-color="#345de1"/></linearGradient>
+    <linearGradient id="block-3" gradientUnits="userSpaceOnUse" x1="77.79" y1="68.46" x2="52.09" y2="83.29"><stop offset="0" stop-color="#3168e2"/><stop offset="1" stop-color="#2e74e4"/></linearGradient>
+    <linearGradient id="block-4" gradientUnits="userSpaceOnUse" x1="47.91" y1="83.29" x2="22.21" y2="68.46"><stop offset="0" stop-color="#3265e2"/><stop offset="1" stop-color="#29b6ec"/></linearGradient>
+    <linearGradient id="block-5" gradientUnits="userSpaceOnUse" x1="20.12" y1="64.84" x2="20.12" y2="35.16"><stop offset="0" stop-color="#21a7ea"/><stop offset="1" stop-color="#65d9f5"/></linearGradient>
+    <linearGradient id="block-6" gradientUnits="userSpaceOnUse" x1="22.21" y1="31.54" x2="47.91" y2="16.71"><stop offset="0" stop-color="#54d4f3"/><stop offset="1" stop-color="#38cef0"/></linearGradient>
+  </defs>
+  <polygon points="55.488,3.695 87.358,22.095 71.423,31.295 55.488,22.095" fill="url(#block-1)"/>
+  <polygon points="88.443,30.220 88.443,69.780 71.313,59.890 71.313,40.110" fill="url(#block-2)"/>
+  <polygon points="86.351,73.403 52.091,93.183 52.091,73.403 69.221,63.513" fill="url(#block-3)"/>
+  <polygon points="47.909,93.183 13.649,73.403 30.779,63.513 47.909,73.403" fill="url(#block-4)"/>
+  <polygon points="11.557,69.780 11.557,30.220 28.687,40.110 28.687,59.890" fill="url(#block-5)"/>
+  <polygon points="13.649,26.597 47.909,6.817 47.909,26.598 30.779,36.487" fill="url(#block-6)"/>
+</svg>
