@@ -8,7 +8,7 @@ use crate::{compare_revisions, parse_revision};
 
 /// Values that are not revisions, other than the empty one, which
 /// `compare_revisions` takes for a view that has seen nothing.
-const NOT_REVISIONS: [(&str, &str); 10] = [
+pub(crate) const NOT_REVISIONS: [(&str, &str); 10] = [
     ("letters", "abc"),
     ("a fraction", "1.5"),
     ("a negative number", "-1"),

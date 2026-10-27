@@ -2,15 +2,21 @@
 // TestDatabaseFailures and TestDatabaseFailuresOfTheV2API through load and
 // write rather than through Execute, the tests of Write, of RegisterSchemas, of
 // the verification of signatures, of FromLatest and Ignore with a database,
-// and "agrees with the database on every character" of TestSubjectScheme.
-// Execute, its conflicts, its retries, and the state cache come next.
+// and "agrees with the database on every character" of TestSubjectScheme. The
+// tests of Execute, its conflicts and its retries, and of failed writes, which
+// write and execute share, are in the modules execute, conflict_retries and
+// failed_writes. The state cache comes next.
 //
 // The answers of the database come either from a real EventSourcingDB, which
-// all tests share (see database), or from a fake that answers one route as a
-// test tells it (see fake), since the client SDK does not let a test make the
-// error of an answer itself.
+// all tests share (see database), or from a fake that answers the routes a
+// test gives it as the test tells it (see fake), since the client SDK does not
+// let a test make the error of an answer itself.
 
+mod commands;
+mod conflict_retries;
 mod database;
+mod execute;
+mod failed_writes;
 mod fake;
 
 use std::{collections::HashMap, error::Error};

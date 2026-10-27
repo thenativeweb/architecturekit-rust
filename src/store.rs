@@ -11,17 +11,22 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 
 use crate::{
-    Event, EventSchema, Failure, Permanent, Precondition, State, Transient, UpcastEvent,
-    command::write_preconditions,
+    Command, Decider, Event, EventSchema, Events, Failure, Permanent, Precondition, State,
+    Transient, UpcastEvent,
+    command::{
+        checked_preconditions, resolve_preconditions, violated_precondition, write_preconditions,
+    },
     state::{evolve_by_stored, from_latest_of},
 };
 
+mod any;
 mod error;
 mod failure;
 #[cfg(test)]
 mod tests;
 
-pub use error::{LoadError, RegisterSchemasError, WriteError};
+pub use any::Error;
+pub use error::{ExecuteError, LoadError, RegisterSchemasError, WriteError};
 use failure::{database_failure, is_schema_conflict, read_failure, schema_refusal, write_failure};
 
 /// Reads from and writes to EventSourcingDB, through the client SDK.
@@ -46,6 +51,7 @@ pub struct Store {
     client: Arc<Client>,
     source: String,
     verification: Verification,
+    conflict_retries: usize,
 }
 
 #[derive(Debug)]
@@ -62,6 +68,7 @@ pub struct StoreBuilder {
     source: String,
     skips_hashes: bool,
     verification_key: Option<VerifyingKey>,
+    conflict_retries: usize,
 }
 
 impl StoreBuilder {
@@ -89,6 +96,45 @@ impl StoreBuilder {
         self
     }
 
+    /// Has [`Store::execute`] decide again, up to the given number of times,
+    /// if a command could not be written because something else was written to
+    /// its subject after the state had been read. It then reads the state anew
+    /// and the decider decides on it, as if the command had arrived a moment
+    /// later. Without this, a conflict is reported right away.
+    ///
+    /// This applies only to commands whose preconditions include
+    /// [`Precondition::on_state_read`], since only then can the conflict come
+    /// from the state that was read. A command that checks only a revision the
+    /// caller hands over is never decided again: the caller has to learn about
+    /// the conflict, and deciding again would fail the same way. A command that
+    /// checks [`on_state_read`](Precondition::on_state_read) together with any
+    /// other precondition, such as one made with
+    /// [`require`](Precondition::require), is decided again only if
+    /// [`on_state_read`](Precondition::on_state_read) did not hold. A database
+    /// that offers the v2 API names the precondition that did not hold, so if
+    /// it is another one, such as an outdated revision of the caller, the
+    /// conflict is reported at once. A database that offers just the v1 API,
+    /// such as EventSourcingDB 1.2, does not name it, so then the command is
+    /// decided again whenever [`on_state_read`](Precondition::on_state_read) is
+    /// among its preconditions, and if another one did not hold, every attempt
+    /// fails the same way until the retries are used up. On the same subject, a
+    /// revision of the caller and [`on_state_read`](Precondition::on_state_read)
+    /// need not both be checked: if the revision of the caller holds, so does
+    /// the other.
+    ///
+    /// Once the retries are used up, or once the database names another
+    /// precondition, the conflict is reported as a [`Transient::Conflict`]
+    /// either way, whose source is the answer of the database, so that its
+    /// details can be read. [`Store::write`] never decides again, since it
+    /// decides nothing. Nor is a write tried again whose outcome is unknown,
+    /// since its events may have been stored (see
+    /// [`ExecuteError::OutcomeUnknown`]).
+    #[must_use]
+    pub fn conflict_retries(mut self, retries: usize) -> Self {
+        self.conflict_retries = retries;
+        self
+    }
+
     /// Builds the store.
     ///
     /// # Panics
@@ -111,6 +157,7 @@ impl StoreBuilder {
             client: Arc::new(self.client),
             source: self.source,
             verification,
+            conflict_retries: self.conflict_retries,
         }
     }
 }
@@ -146,6 +193,7 @@ impl Store {
             source: source.into(),
             skips_hashes: false,
             verification_key: None,
+            conflict_retries: 0,
         }
     }
 
@@ -229,6 +277,122 @@ impl Store {
         })
     }
 
+    /// Executes a command: reads the state of its subject, lets the decider
+    /// decide on it, and writes the events it decided on to the subject, under
+    /// the preconditions the command declares. It returns the events as the
+    /// database recorded them, or none if the decider decided on none.
+    ///
+    /// [`Precondition::on_state_read`] is filled in with the last event read,
+    /// so that the events are only written if the state they were decided on
+    /// still holds. A conflict is reported, and the caller decides what to do
+    /// about it, unless the store was built with
+    /// [`StoreBuilder::conflict_retries`] and the conflict may come from the
+    /// state that was read, in which case it decides again first.
+    ///
+    /// The decider decides on variants of the events of the state, so the
+    /// state has a rule for every event that is written, and can read the
+    /// subject for the next command. If the data of one of the events can not
+    /// be encoded as JSON, none of them is written, and executing fails
+    /// permanently, naming the event type, the subject and the reason, since
+    /// trying again would fail the same way.
+    ///
+    /// Dropping the future before the write has begun writes nothing, also
+    /// while the decider decides. Once the write has begun, it runs on a task
+    /// of its own, as with [`Store::write`], so that it is finished even if the
+    /// caller stops waiting for it.
+    ///
+    /// # Errors
+    ///
+    /// Fails with [`ExecuteError::Decider`] if the decider refuses the command,
+    /// with [`ExecuteError::Transient`], including a [`Transient::Conflict`]
+    /// for a precondition that did not hold, or with
+    /// [`ExecuteError::Permanent`] if nothing was written, with
+    /// [`ExecuteError::OutcomeUnknown`] if the events may have been stored
+    /// nonetheless, and with [`ExecuteError::NotARevision`] for an ID of
+    /// [`Precondition::on_event_id`] that is not a revision. The preconditions
+    /// are checked before anything is read, as
+    /// [`check_preconditions`](crate::check_preconditions) checks them.
+    ///
+    /// # Panics
+    ///
+    /// A state that starts from an event type it has no rule for is a
+    /// programming error, so this panics (see [`State::from_latest`]).
+    pub async fn execute<C, S, D>(
+        &self,
+        decider: &Decider<C, S, D>,
+        command: C,
+    ) -> Result<Vec<eventsourcingdb::Event>, ExecuteError<D>>
+    where
+        C: Command + Clone,
+        S: State,
+    {
+        let declared = checked_preconditions(&command)?;
+        let retries = if declared.iter().any(Precondition::is_on_state_read) {
+            self.conflict_retries
+        } else {
+            0
+        };
+
+        let mut attempt = 0;
+        loop {
+            let conflict = match self.execute_once(decider, command.clone()).await {
+                Err(ExecuteError::Transient(Transient::Conflict(conflict)))
+                    if attempt < retries =>
+                {
+                    conflict
+                }
+                executed => return executed,
+            };
+
+            // Deciding again only helps if the state that was read has
+            // changed. If the database names another precondition as the one
+            // that did not hold, every attempt would fail the same way.
+            if violated_precondition(&conflict, &declared)
+                .is_some_and(|violated| !violated.is_on_state_read())
+            {
+                return Err(ExecuteError::Transient(Transient::Conflict(conflict)));
+            }
+
+            attempt += 1;
+        }
+    }
+
+    /// Reads the state, decides, and writes, once. The preconditions of the
+    /// client SDK can not be copied, so every attempt asks the command for
+    /// them anew.
+    async fn execute_once<C: Command, S: State, D>(
+        &self,
+        decider: &Decider<C, S, D>,
+        command: C,
+    ) -> Result<Vec<eventsourcingdb::Event>, ExecuteError<D>> {
+        let subject = command.subject();
+        let declared = command.preconditions();
+
+        let (state, last_event_id) = self.fold::<S>(&subject).await?;
+
+        let events = decider
+            .decide(command, state)
+            .await
+            .map_err(ExecuteError::Decider)?;
+        if events.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // None of the events is written if the data of one of them can not be
+        // encoded.
+        let candidates = events
+            .into_iter()
+            .map(|event| self.candidate(subject.clone(), event.event_type(), event.to_data()))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let preconditions = resolve_preconditions(&subject, declared, last_event_id.as_deref());
+        let doing = format!("writing {subject:?}");
+
+        Ok(self
+            .write_candidates(candidates, preconditions, doing)
+            .await?)
+    }
+
     /// Writes events to one or several subjects at once, so that either all of
     /// them are written or none, under the given preconditions. Use it for
     /// what is not a decision on the state of a single subject, such as a
@@ -294,11 +458,23 @@ impl Store {
             )));
         }
 
-        let data = event.data.map_err(|cause| {
+        self.candidate(event.subject, event.event_type, event.data)
+    }
+
+    /// Turns the encoded data of an event of the given type into what the
+    /// client writes to the subject, with the source of the store. Data that
+    /// could not be encoded fails permanently, naming the event type, the
+    /// subject and the reason. Execute and write both encode with it.
+    fn candidate(
+        &self,
+        subject: String,
+        event_type: &str,
+        data: Result<Value, serde_json::Error>,
+    ) -> Result<EventCandidate, Permanent> {
+        let data = data.map_err(|cause| {
             Permanent::Other(Failure::new(
                 format!(
-                    "refusing to write an event of type {:?} to {:?}, since its data can not be encoded as JSON",
-                    event.event_type, event.subject,
+                    "refusing to write an event of type {event_type:?} to {subject:?}, since its data can not be encoded as JSON",
                 ),
                 Some(Box::new(cause)),
             ))
@@ -307,8 +483,8 @@ impl Store {
         Ok(EventCandidate {
             data,
             source: self.source.clone(),
-            subject: event.subject,
-            ty: event.event_type.to_owned(),
+            subject,
+            ty: event_type.to_owned(),
             traceinfo: None,
         })
     }
