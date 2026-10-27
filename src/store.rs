@@ -4,7 +4,9 @@ use ed25519_dalek::VerifyingKey;
 use eventsourcingdb::{
     Client, EventCandidate,
     error::ClientError,
-    request_options::{ReadEventMissingStrategy, ReadEventsOptions, ReadFromLatestEventOptions},
+    request_options::{
+        Bound, BoundType, ReadEventMissingStrategy, ReadEventsOptions, ReadFromLatestEventOptions,
+    },
 };
 use futures_util::StreamExt;
 use serde_json::Value;
@@ -22,12 +24,14 @@ use crate::{
 mod any;
 mod error;
 mod failure;
+mod state_cache;
 #[cfg(test)]
 mod tests;
 
 pub use any::Error;
 pub use error::{ExecuteError, LoadError, RegisterSchemasError, WriteError};
 use failure::{database_failure, is_schema_conflict, read_failure, schema_refusal, write_failure};
+use state_cache::StateCache;
 
 /// Reads from and writes to EventSourcingDB, through the client SDK.
 ///
@@ -52,6 +56,7 @@ pub struct Store {
     source: String,
     verification: Verification,
     conflict_retries: usize,
+    state_cache: Option<StateCache>,
 }
 
 #[derive(Debug)]
@@ -69,6 +74,7 @@ pub struct StoreBuilder {
     skips_hashes: bool,
     verification_key: Option<VerifyingKey>,
     conflict_retries: usize,
+    max_cached_subjects: usize,
 }
 
 impl StoreBuilder {
@@ -93,6 +99,22 @@ impl StoreBuilder {
     #[must_use]
     pub fn signature_verification(mut self, verification_key: VerifyingKey) -> Self {
         self.verification_key = Some(verification_key);
+        self
+    }
+
+    /// Keeps the states of the most recently used subjects in memory, up to the
+    /// given number, so that the next command on one of them reads only the
+    /// events written since. A number of 0 keeps none, which is the same as
+    /// leaving it out, so that a configuration can turn the cache off.
+    ///
+    /// The cache is correct with several processes writing to the same
+    /// subjects, since every read still reads all events after the ones it
+    /// has cached. It tells states apart by their type and their subject, and
+    /// it hands out a clone of the cached state, so that the caller can not
+    /// change what the cache holds.
+    #[must_use]
+    pub fn state_cache(mut self, max_subjects: usize) -> Self {
+        self.max_cached_subjects = max_subjects;
         self
     }
 
@@ -158,6 +180,8 @@ impl StoreBuilder {
             source: self.source,
             verification,
             conflict_retries: self.conflict_retries,
+            state_cache: (self.max_cached_subjects > 0)
+                .then(|| StateCache::new(self.max_cached_subjects)),
         }
     }
 }
@@ -194,6 +218,7 @@ impl Store {
             skips_hashes: false,
             verification_key: None,
             conflict_retries: 0,
+            max_cached_subjects: 0,
         }
     }
 
@@ -223,18 +248,40 @@ impl Store {
 
     /// Reads the state of a subject, and returns it together with the ID of the
     /// last event read, or `None` for a subject without events.
+    ///
+    /// With a state cache, it continues from the cached state, and reads only
+    /// the events after the one that state was built from.
     pub(crate) async fn fold<S: State>(
         &self,
         subject: &str,
     ) -> Result<(S, Option<String>), LoadError> {
         let doing = format!("reading {subject:?}");
-        let options = ReadEventsOptions {
-            from_latest_event: from_latest_of::<S>().map(|event_type| ReadFromLatestEventOptions {
-                if_event_is_missing: ReadEventMissingStrategy::ReadEverything,
-                subject,
-                ty: event_type,
-            }),
-            ..ReadEventsOptions::default()
+        let from_latest = from_latest_of::<S>();
+        let cached = self
+            .state_cache
+            .as_ref()
+            .and_then(|cache| cache.get::<S>(subject));
+        let (mut current, cached_event_id) = match cached {
+            Some((state, last_event_id)) => (state, Some(last_event_id)),
+            None => (S::default(), None),
+        };
+
+        let options = match &cached_event_id {
+            Some(last_event_id) => ReadEventsOptions {
+                lower_bound: Some(Bound {
+                    bound_type: BoundType::Exclusive,
+                    id: last_event_id,
+                }),
+                ..ReadEventsOptions::default()
+            },
+            None => ReadEventsOptions {
+                from_latest_event: from_latest.map(|event_type| ReadFromLatestEventOptions {
+                    if_event_is_missing: ReadEventMissingStrategy::ReadEverything,
+                    subject,
+                    ty: event_type,
+                }),
+                ..ReadEventsOptions::default()
+            },
         };
 
         let events = self
@@ -244,8 +291,7 @@ impl Store {
             .map_err(|error| LoadError::from(read_failure(error, &doing)))?;
         let mut events = pin!(events);
 
-        let mut current = S::default();
-        let mut last_event_id = None;
+        let mut last_event_id = cached_event_id.clone();
 
         while let Some(event) = events.next().await {
             let event = event.map_err(|error| LoadError::from(read_failure(error, &doing)))?;
@@ -253,6 +299,10 @@ impl Store {
 
             last_event_id = Some(event.id().to_owned());
             current = evolve_by_stored(current, UpcastEvent::from_stored(&event))?;
+        }
+
+        if let (Some(cache), Some(last_event_id)) = (&self.state_cache, &last_event_id) {
+            cache.put(subject, current.clone(), last_event_id.clone());
         }
 
         Ok((current, last_event_id))

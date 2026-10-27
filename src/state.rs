@@ -151,7 +151,12 @@ impl EventSchema {
 ///
 /// A state has one way of reading per type. To read the same data in two
 /// ways, wrap it in a second type.
-pub trait State: Default + Clone {
+///
+/// A state is a value that can be sent to another task and holds no
+/// references, so that the store can cache it (see
+/// [`StoreBuilder::state_cache`](crate::StoreBuilder::state_cache)), and a
+/// decider can take it into a future that runs on any thread.
+pub trait State: Default + Clone + Send + 'static {
     /// The events the state evolves by.
     type Event: Events;
 
