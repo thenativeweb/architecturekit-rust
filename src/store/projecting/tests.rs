@@ -17,6 +17,7 @@ use std::{
 use eventsourcingdb::{error::ClientError, request_options::BoundType};
 use futures_util::stream;
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 use super::{RebuildWriter, ResumableWriter, TransactionalWriter, Writer, bound_after, drive};
 use crate::{
@@ -245,9 +246,14 @@ async fn drive_all<W: Writer>(
     batch_size: usize,
 ) -> (Option<String>, Result<(), ProjectionError>, Vec<String>) {
     let mut committed = Vec::new();
-    let (last, result) = drive(writer, events(ids, failure), verified, batch_size, |id| {
-        committed.push(id.to_owned());
-    })
+    let (last, result) = drive(
+        writer,
+        events(ids, failure),
+        verified,
+        batch_size,
+        &CancellationToken::new(),
+        |id| committed.push(id.to_owned()),
+    )
     .await;
 
     (last, result, committed)
@@ -375,6 +381,7 @@ async fn rolls_back_when_an_event_fails_verification() {
             Ok(())
         },
         5,
+        &CancellationToken::new(),
         |_| {},
     )
     .await;

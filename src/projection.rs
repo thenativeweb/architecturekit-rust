@@ -4,8 +4,14 @@ use chrono::{DateTime, Utc};
 
 use crate::{Categorized, Category, Events, Failure, Permanent, Transient, UpcastEvent, Upcasters};
 
+mod run;
 #[cfg(test)]
 pub(crate) mod tests;
+
+pub use run::{
+    CaughtUpError, Phase, ProjectionOptions, ProjectionRun, ProjectionStatus, Reconnect,
+    wait_caught_up,
+};
 
 /// An event as a projection gets it: the metadata of the event as the database
 /// recorded it, and its data, as [`Projection::Event`] says.

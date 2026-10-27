@@ -42,8 +42,9 @@ pub use decider::Decider;
 pub use error::{Categorized, Category, DomainError, Failure, Permanent, Transient};
 pub use event::Event;
 pub use projection::{
-    Envelope, Projected, Projection, ProjectionError, ResumableProjection, Transaction,
-    TransactionalProjection,
+    CaughtUpError, Envelope, Phase, Projected, Projection, ProjectionError, ProjectionOptions,
+    ProjectionRun, ProjectionStatus, Reconnect, ResumableProjection, Transaction,
+    TransactionalProjection, wait_caught_up,
 };
 pub use read::{
     EmptyRange, IfLatestEventIsMissing, LowerBound, Order, ReadOptions, ReadOptionsError, Subjects,
@@ -58,6 +59,10 @@ pub use store::{
 };
 pub use subject::{SubjectScheme, SubjectValuesError};
 pub use upcast::{UpcastEvent, Upcasters};
+
+/// Stops a run of a projection from outside, as a `context.Context` does in
+/// ArchitectureKit for Go (see [`Store::start_projection`]).
+pub use tokio_util::sync::CancellationToken;
 
 #[cfg(feature = "derive")]
 pub use architecturekit_macros::{Event, Events, Schema};

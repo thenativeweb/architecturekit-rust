@@ -1,4 +1,4 @@
-use std::{collections::HashMap, future::Future, pin::pin, sync::Arc};
+use std::{collections::HashMap, future::Future, pin::pin, sync::Arc, time::Duration};
 
 use ed25519_dalek::VerifyingKey;
 use eventsourcingdb::{
@@ -12,6 +12,7 @@ use futures_util::{Stream, StreamExt, future};
 use serde_json::Value;
 use tokio::sync::oneshot;
 
+use crate::Reconnect;
 use crate::{
     Command, Decider, Event, EventSchema, Events, Failure, Permanent, Precondition, ReadOptions,
     State, Subjects, Transient, UpcastEvent,
@@ -26,6 +27,8 @@ mod any;
 mod error;
 mod failure;
 mod projecting;
+
+use projecting::Reconnecting;
 mod state_cache;
 #[cfg(test)]
 mod tests;
@@ -59,9 +62,10 @@ pub struct Store {
     verification: Verification,
     conflict_retries: usize,
     state_cache: Option<StateCache>,
+    reconnecting: Reconnecting,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Verification {
     Hash,
     Nothing,
@@ -77,6 +81,7 @@ pub struct StoreBuilder {
     verification_key: Option<VerifyingKey>,
     conflict_retries: usize,
     max_cached_subjects: usize,
+    reconnecting: Reconnecting,
 }
 
 impl StoreBuilder {
@@ -101,6 +106,49 @@ impl StoreBuilder {
     #[must_use]
     pub fn signature_verification(mut self, verification_key: VerifyingKey) -> Self {
         self.verification_key = Some(verification_key);
+        self
+    }
+
+    /// Sets how long the projections started on the store wait before they
+    /// read again after reading failed, which includes a stream of events that
+    /// ended. The delay starts at the initial delay, doubles with every attempt
+    /// in a row, and never exceeds the maximum delay. It starts over once a
+    /// projection has made progress, or has followed the events for longer than
+    /// the initial delay, even if no event arrived, as when a load balancer
+    /// ends long-lived connections regularly. Without this, the delays are 1
+    /// second and 1 minute.
+    ///
+    /// # Panics
+    ///
+    /// An initial delay of zero is a programming error, since the projections
+    /// would then read again without any pause, and so is a maximum delay below
+    /// the initial delay. Both panic.
+    #[must_use]
+    pub fn reconnect_delays(mut self, initial_delay: Duration, max_delay: Duration) -> Self {
+        assert!(
+            !initial_delay.is_zero(),
+            "architecturekit: reconnect_delays needs an initial delay that is positive, not {initial_delay:?}"
+        );
+        assert!(
+            max_delay >= initial_delay,
+            "architecturekit: reconnect_delays needs a maximum delay that is not below the initial delay of {initial_delay:?}, not {max_delay:?}"
+        );
+
+        self.reconnecting.initial_delay = initial_delay;
+        self.reconnecting.max_delay = max_delay;
+        self
+    }
+
+    /// Calls the given function whenever a projection started on the store is
+    /// about to read again, before it waits, with what it reads again for. A
+    /// panic of the function ends the run of the projection, as a panic of the
+    /// projection does.
+    #[must_use]
+    pub fn reconnect_observer(
+        mut self,
+        observe: impl Fn(&Reconnect) + Send + Sync + 'static,
+    ) -> Self {
+        self.reconnecting.observer = Some(Arc::new(observe));
         self
     }
 
@@ -184,6 +232,7 @@ impl StoreBuilder {
             conflict_retries: self.conflict_retries,
             state_cache: (self.max_cached_subjects > 0)
                 .then(|| StateCache::new(self.max_cached_subjects)),
+            reconnecting: self.reconnecting,
         }
     }
 }
@@ -221,6 +270,7 @@ impl Store {
             verification_key: None,
             conflict_retries: 0,
             max_cached_subjects: 0,
+            reconnecting: Reconnecting::default(),
         }
     }
 
@@ -375,18 +425,7 @@ impl Store {
     /// verification key. It runs on the event as stored, before any upcaster
     /// changes it.
     fn verify(&self, event: &eventsourcingdb::Event) -> Result<(), Permanent> {
-        let verified = match &self.verification {
-            Verification::Signature(key) => event.verify_signature(key),
-            Verification::Hash => event.verify_hash(),
-            Verification::Nothing => Ok(()),
-        };
-
-        verified.map_err(|cause| {
-            Permanent::Unverified(Failure::new(
-                format!("event {} on {:?}", event.id(), event.subject()),
-                Some(Box::new(cause)),
-            ))
-        })
+        verify(&self.verification, event)
     }
 
     /// Executes a command: reads the state of its subject, lets the decider
@@ -725,6 +764,24 @@ impl Store {
 
         Ok(registered)
     }
+}
+
+/// Checks an event that was read: its hash, unless the store was built without,
+/// and its signature as well, if it was built with a verification key. It runs
+/// on the event as stored, before any upcaster changes it.
+fn verify(verification: &Verification, event: &eventsourcingdb::Event) -> Result<(), Permanent> {
+    let verified = match verification {
+        Verification::Signature(key) => event.verify_signature(key),
+        Verification::Hash => event.verify_hash(),
+        Verification::Nothing => Ok(()),
+    };
+
+    verified.map_err(|cause| {
+        Permanent::Unverified(Failure::new(
+            format!("event {} on {:?}", event.id(), event.subject()),
+            Some(Box::new(cause)),
+        ))
+    })
 }
 
 /// Collects the given schemas, leaving out event types that appear more than
