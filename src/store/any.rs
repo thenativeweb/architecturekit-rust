@@ -1,11 +1,12 @@
 use std::{error::Error as StdError, fmt};
 
 use crate::{
-    Categorized, Category, Failure, NotARevision, Permanent, PreconditionsError, Transient,
+    Categorized, Category, EmptyRange, Failure, NotARevision, Permanent, PreconditionsError,
+    ReadOptionsError, Transient,
 };
 
 use super::error::{
-    ExecuteError, LoadError, RegisterSchemasError, WriteError, fmt_outcome_unknown,
+    ExecuteError, LoadError, ReadError, RegisterSchemasError, WriteError, fmt_outcome_unknown,
     source_of_outcome_unknown,
 };
 
@@ -30,6 +31,8 @@ pub enum Error<D> {
     OutcomeUnknown(Failure),
     /// See [`ExecuteError::NotARevision`].
     NotARevision(NotARevision),
+    /// See [`ReadError::EmptyRange`].
+    EmptyRange(EmptyRange),
 }
 
 impl<D> From<ExecuteError<D>> for Error<D> {
@@ -65,6 +68,23 @@ impl<D> From<RegisterSchemasError> for Error<D> {
     }
 }
 
+impl<D> From<ReadError> for Error<D> {
+    fn from(failure: ReadError) -> Self {
+        match failure {
+            ReadError::Transient(failure) => Self::Transient(failure),
+            ReadError::Permanent(failure) => Self::Permanent(failure),
+            ReadError::NotARevision(refusal) => Self::NotARevision(refusal),
+            ReadError::EmptyRange(refusal) => Self::EmptyRange(refusal),
+        }
+    }
+}
+
+impl<D> From<ReadOptionsError> for Error<D> {
+    fn from(refusal: ReadOptionsError) -> Self {
+        ReadError::from(refusal).into()
+    }
+}
+
 impl<D> From<PreconditionsError> for Error<D> {
     fn from(refusal: PreconditionsError) -> Self {
         ExecuteError::from(refusal).into()
@@ -79,6 +99,7 @@ impl<D: fmt::Display> fmt::Display for Error<D> {
             Self::Permanent(failure) => failure.fmt(formatter),
             Self::OutcomeUnknown(failure) => fmt_outcome_unknown(failure, formatter),
             Self::NotARevision(refusal) => refusal.fmt(formatter),
+            Self::EmptyRange(refusal) => refusal.fmt(formatter),
         }
     }
 }
@@ -91,6 +112,7 @@ impl<D: StdError + 'static> StdError for Error<D> {
             Self::Permanent(failure) => failure.source(),
             Self::OutcomeUnknown(failure) => source_of_outcome_unknown(failure),
             Self::NotARevision(refusal) => refusal.source(),
+            Self::EmptyRange(refusal) => refusal.source(),
         }
     }
 }
@@ -101,7 +123,7 @@ impl<D: Categorized> Categorized for Error<D> {
             Self::Decider(failure) => failure.category(),
             Self::Transient(failure) => failure.category(),
             Self::Permanent(failure) => failure.category(),
-            Self::OutcomeUnknown(_) | Self::NotARevision(_) => None,
+            Self::OutcomeUnknown(_) | Self::NotARevision(_) | Self::EmptyRange(_) => None,
         }
     }
 }
