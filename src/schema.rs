@@ -16,9 +16,8 @@ mod tests;
 /// The store registers the schema of every event with EventSourcingDB, which
 /// from then on rejects events whose data does not match it. A registered
 /// schema can not change, so the rules by which a schema is derived do not
-/// change either. They are the same as those of ArchitectureKit for Go, so
-/// that a Go and a Rust application that write the same event type derive the
-/// same schema for it.
+/// change either: a type derives the same schema in every version of the
+/// kit.
 ///
 /// [`Event`](crate::Event) derives the schema of an event. Derive `Schema` for
 /// a type within the data of an event, such as a nested struct:
@@ -81,10 +80,10 @@ mod tests;
 /// - A chrono `DateTime` is a string in the date-time format, a
 ///   `serde_json::Number` a number, and a `serde_json::Value` allows any value.
 ///
-/// A type that Go describes as possibly null is an `Option` in Rust: a Go
-/// pointer, slice or map that may be nil corresponds to an `Option`, an
-/// `Option<Vec<_>>` or an `Option<HashMap<_, _>>`. A `Vec<u8>` is an array of
-/// integers, since that is what serde writes for it, unlike a Go `[]byte`.
+/// A value that may be null is an `Option`, such as an `Option<Vec<_>>` or an
+/// `Option<HashMap<_, _>>`, since serde never writes a `Vec` or a `HashMap` as
+/// null. A `Vec<u8>` is an array of integers, since that is what serde writes
+/// for it.
 ///
 /// The schema of an enum, a union, a unit struct, a tuple struct with several
 /// fields, a struct marked with `tag`, `content`, `into` or `remote`, and a

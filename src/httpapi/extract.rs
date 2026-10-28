@@ -20,9 +20,8 @@ use super::{
 #[cfg(test)]
 mod tests;
 
-/// The body of a request as JSON of the given type, read strictly, as
-/// ArchitectureKit for Go reads it (see [`body_of`]). It
-/// needs the feature `axum`.
+/// The body of a request as JSON of the given type, read strictly (see
+/// [`body_of`]). It needs the feature `axum`.
 ///
 /// ```
 /// # use axum::extract::{Path, State};
@@ -69,8 +68,8 @@ where
 }
 
 /// A route that takes no body, which accepts a body that is empty or `{}`,
-/// and refuses a request from another origin, as ArchitectureKit for Go does
-/// (see [`no_body`]). It needs the feature `axum`.
+/// and refuses a request from another origin (see [`no_body`]). It needs the
+/// feature `axum`.
 ///
 /// A request without a body needs no preflight, so a page of another origin
 /// could send it in the name of the user. That is why a route that changes
@@ -142,9 +141,9 @@ impl<S: Send + Sync> FromRequestParts<S> for Reading {
 }
 
 /// Routes the method QUERY to the handler, as `get` and `post` of axum route
-/// theirs, and answers every other method with 405. A query asks with QUERY
-/// in ArchitectureKit for Go, which sends its parameters as a body, as POST
-/// does, but changes nothing, as GET does. It needs the feature `axum`.
+/// theirs, and answers every other method with 405. A query asks with QUERY,
+/// which sends its parameters as a body, as POST does, but changes nothing, as
+/// GET does. It needs the feature `axum`.
 ///
 /// ```
 /// # use axum::Router;
@@ -182,10 +181,9 @@ async fn only_query(request: Request, next: Next) -> Response {
 }
 
 /// Answers a panic of a handler with 500 and the fixed text
-/// `internal server error`, and logs it as an error, as ArchitectureKit for Go
-/// does. A handler of axum belongs to the application, so the kit catches no
-/// panic itself: use this with the layer `CatchPanicLayer` of tower-http. It
-/// needs the feature `axum`.
+/// `internal server error`, and logs it as an error. A handler of axum belongs
+/// to the application, so the kit catches no panic itself: use this with the
+/// layer `CatchPanicLayer` of tower-http. It needs the feature `axum`.
 ///
 /// ```
 /// # use axum::{Router, routing::post};

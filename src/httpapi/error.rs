@@ -26,9 +26,9 @@ enum Logged {
     AsFailure,
 }
 
-/// A failure of a request, with the status and the message that ArchitectureKit
-/// for Go answers it with. Every error of the kit turns into it with `?`, and
-/// so does every other error through [`HttpError::of`], by its category.
+/// A failure of a request, with the status and the message it is answered
+/// with. Every error of the kit turns into it with `?`, and so does every
+/// other error through [`HttpError::of`], by its category.
 ///
 /// A failure the caller can fix, such as a broken business rule or a malformed
 /// request, is answered with its own text, and not logged. Any other failure

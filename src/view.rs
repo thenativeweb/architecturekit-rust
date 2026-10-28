@@ -510,8 +510,8 @@ where
     T: Clone + Send + Sync + 'static,
 {
     // A panic in a function the view was given leaves the lock poisoned. The
-    // view goes on all the same, as it does in ArchitectureKit for Go, since a
-    // change works on a clone, which never replaces the item if it panics.
+    // view goes on all the same, since a change works on a clone, which never
+    // replaces the item if it panics.
     fn read(&self) -> RwLockReadGuard<'_, Entries<K, T>> {
         self.entries.read().unwrap_or_else(PoisonError::into_inner)
     }

@@ -7,8 +7,7 @@ use crate::{
 
 use super::failure::{Sorted, WriteSorted};
 
-/// Shows a write whose outcome is unknown, in the words of ArchitectureKit for
-/// Go.
+/// Shows a write whose outcome is unknown.
 pub(super) fn fmt_outcome_unknown(
     failure: &Failure,
     formatter: &mut fmt::Formatter<'_>,
@@ -212,8 +211,8 @@ impl Categorized for RegisterSchemasError {
 /// It has exactly the cases executing can end in, so that a `match` without a
 /// catch-all arm handles all of them, in particular
 /// [`OutcomeUnknown`](ExecuteError::OutcomeUnknown), which must not be tried
-/// again blindly. To ask for the category instead, as ArchitectureKit for Go
-/// recommends, use [`Categorized::category`].
+/// again blindly. To ask for the category instead, use
+/// [`Categorized::category`].
 #[derive(Debug)]
 pub enum ExecuteError<D> {
     /// The decider refused the command, or failed while it decided, for

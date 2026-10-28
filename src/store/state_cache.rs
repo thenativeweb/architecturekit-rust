@@ -1,5 +1,4 @@
-//! The states of the most recently used subjects, as the state cache of
-//! ArchitectureKit for Go holds them.
+//! The states of the most recently used subjects.
 
 use std::{
     any::{Any, TypeId},

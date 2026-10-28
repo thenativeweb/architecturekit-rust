@@ -21,10 +21,10 @@ const SUBJECT_CHARACTERS: &str = "A-Z, a-z, 0-9, underscores, and hyphens";
 ///
 /// let workshops = SubjectScheme::new("/tenant/{tenant}/workshop/{workshop}");
 ///
-/// let subject = workshops.build(&["acme", "go-cqrs"]);
-/// assert_eq!(subject, "/tenant/acme/workshop/go-cqrs");
+/// let subject = workshops.build(&["acme", "event-sourcing"]);
+/// assert_eq!(subject, "/tenant/acme/workshop/event-sourcing");
 ///
-/// assert_eq!(workshops.value(&subject, "workshop"), Some("go-cqrs"));
+/// assert_eq!(workshops.value(&subject, "workshop"), Some("event-sourcing"));
 /// ```
 ///
 /// EventSourcingDB allows only ASCII letters and digits, underscores, and

@@ -1,5 +1,4 @@
-//! How a failure of the client is sorted into a category, by the same rules as
-//! ArchitectureKit for Go.
+//! How a failure of the client is sorted into a category.
 
 use eventsourcingdb::error::{ClientError, DbApiError, code};
 use status::{CONFLICT, OK, REQUEST_TIMEOUT, TOO_MANY_REQUESTS, UNAUTHORIZED};

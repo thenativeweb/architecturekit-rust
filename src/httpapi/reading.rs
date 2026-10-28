@@ -22,9 +22,9 @@ pub const REVISION: HeaderName = HeaderName::from_static("revision");
 /// How long a query waits for a revision, unless it says otherwise.
 pub const DEFAULT_WAIT: Duration = Duration::from_secs(5);
 
-/// How a query reads a view, as ArchitectureKit for Go reads it: the revision
-/// the caller waits for, with the header `Wait-For-Revision`, the answers the
-/// caller holds already, with `If-None-Match`, and the resource it asks for.
+/// How a query reads a view: the revision the caller waits for, with the
+/// header `Wait-For-Revision`, the answers the caller holds already, with
+/// `If-None-Match`, and the resource it asks for.
 /// It is an extractor of axum with the feature `axum`, and comes from
 /// [`Reading::of`] otherwise.
 ///
@@ -83,9 +83,8 @@ impl Reading {
 
     /// Adds a value that the answer depends on besides the revision of the
     /// view and the query, such as the current day for an answer that counts
-    /// the days until something is due, as `Varying` does in ArchitectureKit
-    /// for Go. It goes into the tag of the answer (see
-    /// [`revisioned`](Reading::revisioned)).
+    /// the days until something is due. It goes into the tag of the answer
+    /// (see [`revisioned`](Reading::revisioned)).
     #[must_use]
     pub fn varying(self, value: impl fmt::Display) -> Self {
         Self {
@@ -95,8 +94,7 @@ impl Reading {
     }
 
     /// Waits until the view has reached the revision the caller waits for,
-    /// but no longer than the given time, and tags nothing, as `Await` and
-    /// `Awaiting` do in ArchitectureKit for Go. A request without
+    /// but no longer than the given time, and tags nothing. A request without
     /// `Wait-For-Revision` does not wait at all, and one whose wait runs out
     /// is answered with what the view holds, rather than with an error.
     ///
@@ -125,10 +123,9 @@ impl Reading {
     }
 
     /// Waits as [`awaiting`](Reading::awaiting) does, and then answers with
-    /// the revision of the view, as `Revisioned` does in ArchitectureKit for
-    /// Go: the answer names it in the header `Revision`, carries a tag of the
-    /// revision and the query as `ETag`, and is cached only privately, and
-    /// checked every time. A caller that holds the tag already, in
+    /// the revision of the view: the answer names it in the header
+    /// `Revision`, carries a tag of the revision and the query as `ETag`, and
+    /// is cached only privately, and checked every time. A caller that holds the tag already, in
     /// `If-None-Match`, is answered with 304, without asking the function for
     /// the answer.
     ///
@@ -227,7 +224,7 @@ impl Reading {
     }
 }
 
-/// The 64-bit hash FNV-1a, which ArchitectureKit for Go tags its answers with.
+/// The 64-bit hash FNV-1a, which tags the answers.
 struct Fnv64a(u64);
 
 impl Default for Fnv64a {
@@ -245,8 +242,8 @@ impl Fnv64a {
     }
 }
 
-/// The answer to a query, as ArchitectureKit for Go answers it: the result as
-/// JSON, which is never cached, unless [`Reading::revisioned`] tags it.
+/// The answer to a query: the result as JSON, which is never cached, unless
+/// [`Reading::revisioned`] tags it.
 ///
 /// A query that looks up a single item, and finds none, answers with
 /// [`found`](QueryAnswer::found), which is 404 with the text `not found`. To

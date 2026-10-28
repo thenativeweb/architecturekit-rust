@@ -1,7 +1,7 @@
-//! Drives projections, as ArchitectureKit for Go does: it catches up from the
-//! checkpoint of a projection, in batches, verifies every event before the
-//! projection applies it, and follows the events as they are written, reading
-//! again after a failure that may pass.
+//! Drives projections: it catches up from the checkpoint of a projection, in
+//! batches, verifies every event before the projection applies it, and
+//! follows the events as they are written, reading again after a failure that
+//! may pass.
 
 use std::{
     fmt,
