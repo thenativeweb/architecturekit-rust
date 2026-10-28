@@ -45,10 +45,13 @@ name = "architecturekit"
 version = "0.15.0"
 dependencies = [
  "architecturekit-macros",
+ "axum",
+ "bytes",
  "chrono",
  "ed25519-dalek",
  "eventsourcingdb",
  "futures-util",
+ "http",
  "log",
  "serde",
  "serde_json",
