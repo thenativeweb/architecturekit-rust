@@ -121,15 +121,22 @@ fn is_neither_ready_nor_alive_once_a_projection_has_stopped() {
 
 #[test]
 fn judges_by_every_projection() {
-    let runs = [live("catalog"), stopped("loans")];
+    // The stopped run comes first as well as last, so that judging by the
+    // last run alone does not pass.
+    let (catalog, loans) = (live("catalog"), stopped("loans"));
 
-    let (status, body) = ask(&Health::readiness(runs.clone()));
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(body["projections"]["catalog"]["phase"], "live");
-    assert_eq!(body["projections"]["loans"]["phase"], "stopped");
+    for runs in [
+        [catalog.clone(), loans.clone()],
+        [loans.clone(), catalog.clone()],
+    ] {
+        let (status, body) = ask(&Health::readiness(runs.clone()));
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["projections"]["catalog"]["phase"], "live");
+        assert_eq!(body["projections"]["loans"]["phase"], "stopped");
 
-    let (status, _) = ask(&Health::liveness(runs));
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let (status, _) = ask(&Health::liveness(runs));
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
 }
 
 #[test]
