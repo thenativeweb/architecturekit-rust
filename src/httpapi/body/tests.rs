@@ -1,8 +1,7 @@
-// These tests mirror the parts of TestBodyOf, TestNoBody and
-// TestNoBodyFromAnotherOrigin of ArchitectureKit for Go that need no web
-// framework: the type a body claims to be, its size, and a route that takes
-// no body. How the body is read, and the limit of a layer, are part of the
-// tests of the extractors for axum.
+// These tests check what reading a body needs no web framework for: the type
+// a body claims to be, its size, and a route that takes no body. How the body
+// is read, and the limit of a layer, are part of the tests of the extractors
+// for axum.
 
 use http::{Method, Request, StatusCode, request::Parts};
 use serde::Deserialize;

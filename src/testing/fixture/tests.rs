@@ -1,19 +1,11 @@
-// These tests mirror fixture_test.go of the package architecturekittest of
-// ArchitectureKit for Go: TestGiven, TestHistory, TestThenNothing,
-// TestThenFailed, TestThenState, TestGivenStored, TestEventMatchers,
-// TestThenEvents, TestEventThatCanNotBeEncoded, TestWhenChecksPreconditions,
-// TestThenPreconditions, and those of TestPreconditionsOf that compare
-// declared preconditions, the others being tests of comparing preconditions,
-// which are in the tests of command.
+// These tests check the test fixture for deciders: the given events, stored
+// or not, the history, every assertion that follows when, matching events, an
+// event that can not be encoded, and the check of preconditions in when.
+// Comparing preconditions is part of the tests of command.
 //
-// Some do not apply to Rust. A decider decides on variants of the events of
-// its state, which has a rule for each of them, and none of them can be nil,
-// so "fails on event without rule" of Given, TestEventWithoutRule and
-// TestNilEvent have nothing to check, nor does the zero Decider, which can not
-// be made. The checks of a function that is nil, and the fixtures taking a
-// testing.TB (TestSpy, TestTestingTB), are Go of its own: an assertion fails
-// by panicking, which the tests catch to read its message. A command can not
-// declare a zero Precondition or a requirement of nothing either.
+// A decider decides on variants of the events of its state, which has a rule
+// for each of them, so an event without a rule can not be written. An
+// assertion fails by panicking, which the tests catch to read its message.
 
 #![expect(
     unused_results,
@@ -366,7 +358,7 @@ async fn fails_then_failed_when_nothing_failed() {
 
 #[tokio::test]
 async fn hands_out_the_result_for_what_then_failed_does_not_compare() {
-    // The category of an error, as ThenFailed(ErrPermanent) checks it in Go.
+    // The category of an error, which then_failed does not compare.
     let decision = given(&decider(), []).when(open("")).await;
     let Err(ExecuteError::Decider(refusal)) = decision.result() else {
         panic!("the decider refuses the command");

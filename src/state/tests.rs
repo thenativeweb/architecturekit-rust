@@ -1,21 +1,13 @@
-// These tests mirror TestReplay, TestSchemas, TestHasRule, TestStep,
-// TestStepStored, TestReplayWithFromLatest, TestReplayStoredWithFromLatest,
-// TestFromLatest and TestIgnore of ArchitectureKit for Go. What Go checks while
-// a state is being built does not apply to Rust, where the types make it a
-// given, or the compiler checks it:
+// These tests check replaying and stepping states, their schemas, the rules
+// for event types, from_latest, and events that a state ignores:
 //
-// - TestEvolve: a nil function, a pointer or an interface as the event type,
-//   and chaining. Two rules for the same event type are two variants of the
-//   same event type, which fail to compile (see the refusals).
-// - "fails on unknown event type" and "fails on event without rule" for
-//   Replay: a typed event is always one of the variants. Both are checked for
-//   replay_stored, where they can happen.
-// - TestStep "refuses a state that it cannot copy", and TestInitialValue: a
-//   state is Clone, every read starts from a fresh Default, and step takes
+// - A typed event is always one of the variants of its enum, so an unknown
+//   event type, and an event without a rule, are checked for replay_stored,
+//   where they can happen.
+// - A state is Clone, every read starts from a fresh Default, and step takes
 //   the given state by reference.
-// - TestFromLatest: a pointer or an interface as the event type, and calling
-//   it twice. TestIgnore: an ignored event is a variant whose arm returns the
-//   state unchanged, so its data is decoded, and there is nothing to panic on.
+// - An ignored event is a variant whose arm returns the state unchanged, so
+//   its data is decoded.
 //
 // The tests that need a database come with the store.
 
@@ -157,8 +149,8 @@ fn folds_events_in_order() {
 
 #[test]
 fn fails_on_an_event_that_does_not_survive_being_written_and_read_back() {
-    // Go refuses to encode NaN; serde writes it as null, which can not be read
-    // back as a number. Either way, replaying fails as reading would.
+    // serde writes NaN as null, which can not be read back as a number, so
+    // replaying fails as reading would.
     let failure = replay::<Gauge>([GaugeEvent::Measured(Measured { value: f64::NAN })])
         .expect_err("NaN does not survive JSON");
 

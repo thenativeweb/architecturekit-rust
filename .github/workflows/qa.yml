@@ -73,7 +73,7 @@ jobs:
       uses: taiki-e/install-action@v2.87.29
       with:
         tool: cargo-hack
-    # Go compiles every package on its own. Rust compiles a crate with the
-    # features its user turns on, so every feature has to compile on its own.
+    # Rust compiles a crate with the features its user turns on, so every
+    # feature has to compile on its own.
     - name: Check every feature on its own
       run: cargo hack check --each-feature --locked

@@ -1,9 +1,7 @@
-// These tests mirror TestHealth and TestHealthVerdicts of ArchitectureKit for
-// Go. They put the runs into their phases themselves, rather than running
-// projections against a database, since how a run gets into a phase is part
-// of the tests of the projections. What does not apply: a projection without a
-// run, which Rust does not allow, and changing the given runs afterwards,
-// which Rust does not allow either, since Health owns them.
+// These tests check Health, and its verdict for every phase. They put the
+// runs into their phases themselves, rather than running projections against
+// a database, since how a run gets into a phase is part of the tests of the
+// projections. Health owns its runs, so they can not change afterwards.
 
 use std::{
     sync::Arc,

@@ -1,20 +1,14 @@
-// These tests mirror TestInMemoryView, TestInMemoryIndex,
-// TestInMemoryIndexValues, TestKeyedView, TestOutcome, TestCloneWith,
-// TestSplitEvents and TestInMemoryViewRevision of ArchitectureKit for Go,
-// under the same sentences. Some do not apply to Rust:
+// These tests check InMemoryView, InMemoryIndex and the values of an index,
+// KeyedView, outcomes, events that an upcaster splits, and the revision of a
+// view in memory:
 //
-// - A function or an option can not be nil, and an option can not be given
-//   twice, since the field of the revision is given with the view.
 // - Reading hands out a stream of items that were cloned when it was called,
 //   which stops as soon as its caller stops reading it.
 // - A change always works on a clone of the item, which replaces the item
-//   once the change is accepted, so CloneWith has nothing to switch on, and
-//   the compiler rules out a reader that reads while a change writes.
-// - The numbers of the outcomes and the zero outcome have no counterpart,
-//   since an Outcome is an enum, and an error comes without one.
-// - Waiting ends when its future is dropped, rather than with a context.
-// - The tests of RevisionIn against a database are part of the tests of the
-//   store.
+//   once the change is accepted.
+// - Waiting ends when its future is dropped.
+// - The tests of the revision an item keeps against a database are part of
+//   the tests of the store.
 
 use std::{
     borrow::Borrow,

@@ -1,10 +1,7 @@
-// These tests mirror TestUpcaster, TestUpcast, TestSharedUpcasters,
-// TestReplayStored and TestStepStored of ArchitectureKit for Go. Not
-// applicable: a nil upcaster, and TestStateUpcastWith, since a state names its
-// upcasters with State::upcasters, once, by its type. In Go, the data of a
-// stored event is raw JSON, so "error is permanent" stores text that is no
-// JSON; in Rust, the data is a serde_json::Value, so it stores a value that
-// does not match the old shape instead.
+// These tests check upcasters, upcasting, shared upcasters, replay_stored and
+// step_stored. A state names its upcasters with State::upcasters, once, by its
+// type. The data of a stored event is a serde_json::Value, so "error is
+// permanent" stores a value that does not match the old shape.
 
 use std::{convert::Infallible, sync::LazyLock};
 

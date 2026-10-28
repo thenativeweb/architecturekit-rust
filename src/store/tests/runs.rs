@@ -1,14 +1,9 @@
-// These tests mirror TestStartProjection, TestProjectionRun,
-// TestStartTransactionalProjection, TestStartProjectionWithReconnects,
-// TestWithReconnectDelays, TestNamed, TestReconnect, TestWaitCaughtUp and
-// TestWaitCaughtUpForSeveralRuns of ArchitectureKit for Go, and the panics of
-// TestPanickingProjection that end a run.
+// These tests check starting projections and transactional projections, their
+// runs, reconnecting and its delays, names, observers of reconnects, waiting
+// until runs have caught up, and the panics that end a run.
 //
-// A run stops through its token rather than a context, so what Go checks
-// about an ended context is checked through the token, and waiting stops when
-// its future is dropped. A projection is of one kind by its trait, a name is
-// an option of its own, and an observer is a function, so a nil option, a nil
-// observer, naming a projection twice, and a nil run can not be written.
+// A run stops through its token, and waiting stops when its future is
+// dropped.
 
 use std::{
     sync::{

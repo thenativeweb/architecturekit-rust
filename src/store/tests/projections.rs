@@ -1,12 +1,11 @@
-// These tests mirror the tests of catching up of TestProjection,
-// TestCheckpointFailure, TestBatching, TestPanickingProjection and
-// TestTypedProjection of ArchitectureKit for Go, against a database. Running
-// a projection that follows the events comes with the next slice.
+// These tests check catching up, failing checkpoints, batches, panicking
+// projections and typed projections, against a database. Running a
+// projection that follows the events is part of the tests of runs.
 //
 // A projection is of one kind by its trait, so a projection that is
-// transactional as well can not be handed to the wrong function, nor can a nil
-// projection be handed over at all. The projections of the tests yield before
-// they do anything, as a real one waits for its target.
+// transactional as well can not be handed to the wrong function. The
+// projections of the tests yield before they do anything, as a real one waits
+// for its target.
 
 use std::{
     fmt,

@@ -1,13 +1,7 @@
-// These tests mirror TestRoute, TestHandle and TestToCommand of
-// ArchitectureKit for Go, and the parts of TestRouteAnswers that need a route,
-// with a route of axum that the tests build from the building blocks of the
-// kit. A route that writes runs against a database in a container of its own,
-// any other one against a store whose database can not be reached, which it
-// never reaches.
-//
-// What Go checks about wiring a route does not apply, since a route is an
-// ordinary handler of axum: a nil API, function or option, the zero Decider,
-// and a pattern without a method, or with one that must not change anything.
+// These tests check commands over HTTP, with a route of axum that the tests
+// build from the building blocks of the kit. A route that writes runs against
+// a database in a container of its own, any other one against a store whose
+// database can not be reached, which it never reaches.
 
 use std::{future, io, sync::Arc};
 

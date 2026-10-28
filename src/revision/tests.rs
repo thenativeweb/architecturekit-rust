@@ -1,12 +1,6 @@
-// These tests mirror TestCompareRevisions, TestParseRevision and
-// TestRevisionOf of ArchitectureKit for Go, and TestWaitForWritten of
-// wait_for_written_test.go. The tests of the revision of a view in memory come
-// with the view.
-//
-// Waiting ends when its future is dropped, rather than with a context, so
-// what Go checks about a context that ends before the timeout or has ended
-// already does not apply, and neither does a view that fails once the timeout
-// has run out, since it is dropped by then. A view can not be nil.
+// These tests check comparing and parsing revisions, revision_of, and
+// wait_for_written. The tests of the revision of a view in memory come with
+// the view. Waiting ends when its future is dropped.
 
 use std::{
     cmp::Ordering,

@@ -1,15 +1,13 @@
-// These tests mirror the parts of TestBodyOf of ArchitectureKit for Go that
-// decode a body, with the types of Rust. Some do not apply to Rust:
+// These tests check how a body is decoded, with the types of Rust:
 //
 // - serde tells the names of fields apart by their case, so a name in another
 //   case is an unknown field rather than the same one, or a name that occurs
 //   twice.
-// - There is no json.Number, no option string, and no type that decodes itself
-//   from text, and a slice of bytes is a list of numbers.
+// - A slice of bytes is a list of numbers.
 // - A failure is told in words, and its cause, which serde gives as text, is
 //   not kept as an error of its own.
-// - serde takes an object for a list as a list of exactly as many values as it
-//   has fields, which Go refuses.
+// - serde takes a list of exactly as many values as a struct has fields for
+//   that struct.
 
 use std::collections::HashMap;
 
@@ -80,7 +78,7 @@ fn decodes_a_body_that_fits() {
 #[test]
 #[expect(
     clippy::too_many_lines,
-    reason = "the table holds the cases of Go, one after another"
+    reason = "the table holds every case, one after another"
 )]
 fn rejects_json_that_does_not_fit_and_says_why_in_words_of_its_own() {
     for (label, body, text) in [

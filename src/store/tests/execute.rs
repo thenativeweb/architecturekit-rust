@@ -1,22 +1,14 @@
-// These tests mirror TestExecute and TestConflict of ArchitectureKit for Go,
-// the parts of TestOnEventID and TestEncodingEvents that execute commands, and
-// TestAWriteThatTheDatabaseDoesNotSupport, for executing and for writing.
+// These tests check executing commands, conflicts, the parts of on_event_id
+// and of encoding events that execute commands, and a write that the database
+// does not support, for executing and for writing.
 //
-// Some of them do not apply to Rust. A decider decides on variants of the
-// events of its state, which has a rule for each of them, and none of them can
-// be nil, so "refuses an event its state has no rule for and writes nothing",
-// "writes none of the events if one has no rule", "checks the rules before the
-// encoding like the test fixture", and the four tests of nil events have
-// nothing to check. Whether the kit hands the database the same JSON as the
-// client does for the events themselves has nothing to compare either: the
-// client takes the data as a serde_json::Value, which the kit makes from the
-// event, as anyone would. A future that is dropped returns nothing at all, so
-// there is no error of an ended context that a mistake in the code could hide
-// behind. Two cases of reporting a mistake in the code before an ID that is not
-// a revision can not be written in Rust: a zero Precondition, and a
-// requirement of nothing. Execute and the test fixture check the
-// preconditions and encode the events with the same functions, so their errors
-// are the same, and the tests of the fixture check its wording.
+// A decider decides on variants of the events of its state, which has a rule
+// for each of them, so an event without a rule can not be written. A future
+// that is dropped returns nothing at all, so there is no error of an ended
+// context that a mistake in the code could hide behind. Execute and the test
+// fixture check the preconditions and encode the events with the same
+// functions, so their errors are the same, and the tests of the fixture check
+// its wording.
 
 use std::{
     collections::HashMap,

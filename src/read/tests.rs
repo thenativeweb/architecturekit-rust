@@ -1,14 +1,12 @@
-// These tests mirror TestCheckReadOptions, TestReadEmptyRanges,
-// TestReadEmptyRangesAtTheLargestRevision, TestReadEmptyRangesFromTheLatestEvent,
-// TestReadOptionContradictions, and "a subject has to start with a slash" of
-// TestSubjects of ArchitectureKit for Go, through check_read_options, which
-// Store::read applies before it asks the database. The tests of the store show
-// that it does.
+// These tests check check_read_options, which Store::read applies before it
+// asks the database: every combination of bounds, empty ranges, also at the
+// largest revision and from the latest event, contradicting options, and a
+// subject that has to start with a slash. The tests of the store show that it
+// does.
 //
 // The options of a read are an enum per bound and order, so two lower bounds,
 // two upper bounds, two orders, and an IfLatestEventIsMissing that is neither
-// of its values can not be written, nor can a nil option or the zero value of
-// Subjects: those tests of Go have nothing to check.
+// of its values can not be written.
 
 use crate::{
     Categorized, IfLatestEventIsMissing, LowerBound, Order, ReadOptions, ReadOptionsError,
@@ -62,7 +60,7 @@ fn refusal_of(options: &ReadOptions) -> Option<String> {
 /// text of the refusal, if there is one.
 #[expect(
     clippy::too_many_lines,
-    reason = "the table holds every combination of bounds, as the one of Go does"
+    reason = "the table holds every combination of bounds"
 )]
 fn bounded_reads() -> Vec<(&'static str, ReadOptions, Option<&'static str>)> {
     use LowerBound::Unbounded as NoLowerBound;

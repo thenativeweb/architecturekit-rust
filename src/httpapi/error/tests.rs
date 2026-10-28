@@ -1,16 +1,13 @@
-// These tests mirror TestStatusFor, TestCategoryTexts and
-// TestStatusForAnEmptyRange of ArchitectureKit for Go, and the parts of
-// TestAnsweringRefusals, TestAnsweringAValueThatIsNotARevision and
-// TestAnsweringAnEmptyRange that need no route. Some do not apply to Rust:
+// These tests check the status and the message every failure is answered
+// with, and the answers to refusals, to a value that is not a revision, and to
+// an empty range that need no route:
 //
-// - A failure is a value of its own, so there is no mark for one that came
-//   before the command ran, and a handler that fails before it runs a command
-//   answers what it fails with.
-// - A request that the caller cancels is dropped, so it gets no answer, and
-//   there is no 499, nor a deadline of a context to answer with 503.
-// - The log is the one of the log crate, so there is no logger of an API to
-//   fall back from, and its entries name the status, but neither the method
-//   nor the route, which a handler does not know when it answers.
+// - A failure is a value of its own, so a handler that fails before it runs a
+//   command answers what it fails with.
+// - A request that the caller cancels is dropped, so it gets no answer.
+// - The log is the one of the log crate, and its entries name the status, but
+//   neither the method nor the route, which a handler does not know when it
+//   answers.
 
 use std::{convert::Infallible, error::Error, fmt, time::Duration};
 

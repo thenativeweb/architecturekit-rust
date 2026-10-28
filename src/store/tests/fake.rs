@@ -1,8 +1,8 @@
-//! A local HTTP server that stands in for EventSourcingDB, as the fake
-//! databases of ArchitectureKit for Go do. It answers the routes a test gives
-//! it as the test tells it, and every other route with an empty result, as for
-//! a subject without events. It records the path of every request, and handles
-//! one connection after the other, which is enough for the requests of a test.
+//! A local HTTP server that stands in for EventSourcingDB. It answers the
+//! routes a test gives it as the test tells it, and every other route with an
+//! empty result, as for a subject without events. It records the path of every
+//! request, and handles one connection after the other, which is enough for the
+//! requests of a test.
 
 use std::{
     collections::HashMap,

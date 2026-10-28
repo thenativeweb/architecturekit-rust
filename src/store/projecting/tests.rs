@@ -1,16 +1,13 @@
-// These tests mirror TestDrive, TestBatchSize, TestBoundAfter, TestWriters
-// and TestResumableWriter of ArchitectureKit for Go, and those of
-// TestPanickingProjection that concern a transaction, with streams made up
-// by the tests. A projection names its kind by its trait, so TestModeOf has
-// nothing to check, nor do the checks for nil of TestIsNil. A projection of a
-// single function, as ProjectionFunc makes one in Go, needs the types of its
-// events and its error in Rust, so it is an ordinary type there.
+// These tests check driving projections: the size of batches, the bound after
+// a checkpoint, the writers and the resumable writer, and a projection that
+// panics within a transaction, with streams made up by the tests. A
+// projection names its kind by its trait, and a projection of a single
+// function needs the types of its events and its error, so it is an ordinary
+// type.
 //
-// They also mirror the tests of TestTracking that concern what a projection
-// records as seen, which Projection::seen does in Rust rather than a wrapper
-// around the projection. Since it is a method of the trait, what Go checks
-// about wrapping is left to the compiler: a projection keeps its kind and its
-// batch size, a transactional one has no such method, and nothing can be nil.
+// They also check what a projection records as seen, which Projection::seen
+// does: a projection keeps its kind and its batch size, and a transactional
+// one has no such method.
 //
 // The projections of the tests yield before they do anything, as a real one
 // waits for its target, which lets other tasks run in the meantime.

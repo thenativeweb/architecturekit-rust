@@ -1,7 +1,6 @@
-// ArchitectureKit for Go tests its state cache only through Load and Execute,
-// which the tests of the store mirror. These tests check what those can not
-// show reliably: which of two states of the same subject the cache keeps, and
-// which subject it evicts.
+// The tests of the store check the state cache through load and execute.
+// These tests check what those can not show reliably: which of two states of
+// the same subject the cache keeps, and which subject it evicts.
 
 use super::StateCache;
 

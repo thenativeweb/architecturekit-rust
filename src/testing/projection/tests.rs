@@ -1,11 +1,7 @@
-// These tests mirror TestStoredEvent, TestStoredEvents, TestStoredEventsAt,
-// TestProject and TestProjectTransactional of ArchitectureKit for Go. Some do
-// not apply to Rust: a projection is transactional by its trait, so project
-// can not be handed one, and the views hand out a Vec, which a test compares
-// with assert_eq!, so TestItemsOf and TestExpectItems have nothing to check,
-// nor does TestExpectMode, since a projection names its kind by its trait.
-// Since project returns its failure rather than failing the test, the tests
-// check the failure where Go checks what the test reported.
+// These tests check StoredEvent, stored_events, stored_events_at, project, and
+// project_transactional. A projection is transactional by its trait, so
+// project can not be handed one. Since project returns its failure rather than
+// failing the test, the tests check the failure.
 
 use std::{
     error::Error,

@@ -1,10 +1,9 @@
-// These tests mirror the parts of TestBodyOf, TestNoBody and
-// TestNoBodyFromAnotherOrigin of ArchitectureKit for Go that read a body: the
-// order of the checks, the limit of the kit and that of a layer, and a body
-// that can not be read. What a body has to look like is part of the tests of
-// the neutral functions. They also mirror the parts of TestPanicsInRoutes that
-// answer a panic, which a layer of tower-http catches. The stack of a panic is
-// not logged, since the hook of Rust prints it, as long as it is not replaced.
+// These tests check the extractors for axum that read a body: the order of
+// the checks, the limit of the kit and that of a layer, and a body that can
+// not be read. What a body has to look like is part of the tests of the
+// neutral functions. They also check the answer to a panic, which a layer of
+// tower-http catches. The stack of a panic is not logged, since the hook of
+// Rust prints it, as long as it is not replaced.
 
 use std::{any::Any, io};
 

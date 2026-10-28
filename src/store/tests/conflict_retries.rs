@@ -1,12 +1,9 @@
-// These tests mirror TestWithConflictRetries, TestResolvePreconditions and
-// TestViolatedPrecondition of ArchitectureKit for Go.
+// These tests check deciding again on conflicts, resolving preconditions, and
+// telling which precondition did not hold.
 //
-// A negative number of retries can not be written in Rust, so "panics on a
-// negative number of retries" has nothing to check. In place of "stops
-// deciding again once the context has ended", a test drops the future while
-// the decider decides. The client SDK reads the details of an answer as a JSON
-// object, so the cases of TestViolatedPrecondition with details of another
-// shape, or with details that are not JSON at all, never reach the kit.
+// A test drops the future while the decider decides, which stops deciding
+// again. The client SDK reads the details of an answer as a JSON object, so
+// details of another shape never reach the kit.
 //
 // A database that offers the v2 API names the precondition that did not hold,
 // and one that offers just the v1 API does not, so some of the tests expect

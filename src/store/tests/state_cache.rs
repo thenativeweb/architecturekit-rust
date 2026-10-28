@@ -1,13 +1,9 @@
-// These tests mirror TestLoadWithoutStateCache, TestLoadWithStateCache,
-// TestWithStateCache and TestExecuteWithStateCache of ArchitectureKit for Go.
+// These tests check loading with and without the state cache, and executing
+// with it.
 //
-// A state is known by its type in Rust, which is all the cache tells states
-// apart by, so most of what the cache of Go has to compare does not apply:
-// states of the same type built alike or differently, initial values that
-// hold a function or a NaN, and a state with references and no clone
-// function, since every state is Clone. Two different states need two types
-// in either language, which "keeps states of different types on the same
-// subject apart" shows. A negative number of subjects can not be written.
+// A state is known by its type, which is all the cache tells states apart by,
+// and every state is Clone. Two different states need two types, which "keeps
+// states of different types on the same subject apart" shows.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 

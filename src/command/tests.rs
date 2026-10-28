@@ -1,10 +1,9 @@
-// These tests mirror TestPrecondition, TestSubjectPreconditions and
-// TestCheckPreconditions of ArchitectureKit for Go. The tests that need
-// Execute, and the resolving of preconditions, which only Execute uses, come
-// with the store. Two cases of TestExecuteWithInvalidPreconditions do not apply
-// to Rust, since a Precondition can only be made by its functions: a zero
-// value, and a requirement of nothing. The other two are checked here
-// directly, as Execute checks them before it reads.
+// These tests check preconditions, the preconditions of subjects, and
+// check_preconditions. The tests that need execute, and the resolving of
+// preconditions, which only execute uses, come with the store. A Precondition
+// can only be made by its functions, so there is neither a zero value nor a
+// requirement of nothing; the other mistakes are checked here directly, as
+// execute checks them before it reads.
 //
 // The preconditions of the client SDK can not be compared with ==, so the
 // tests compare them by the JSON the client sends for them.
@@ -249,10 +248,8 @@ fn names_a_mistake_in_the_code_before_one_of_the_caller() {
     );
 }
 
-// Comparing preconditions, which the tests of ArchitectureKit for Go check
-// through PreconditionsOf of the test fixture, and through "stands for the
-// revision check of the client SDK, but is a kind of its own" of
-// TestOnEventID.
+// Comparing preconditions, which the test fixture relies on to compare the
+// preconditions that a command declares.
 
 fn pristine(subject: &str, options: Option<PreconditionOptions>) -> Precondition {
     Precondition::require(eventsourcingdb::Precondition::is_subject_pristine(

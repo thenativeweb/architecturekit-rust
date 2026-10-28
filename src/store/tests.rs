@@ -1,11 +1,10 @@
-// These tests mirror the parts of ArchitectureKit for Go that need no Execute:
-// TestDatabaseFailures and TestDatabaseFailuresOfTheV2API through load and
-// write rather than through Execute, the tests of Write, of RegisterSchemas, of
-// the verification of signatures, of FromLatest and Ignore with a database,
-// and "agrees with the database on every character" of TestSubjectScheme. The
-// tests of Execute, its conflicts and its retries, of failed writes, which
-// write and execute share, and of the state cache are in the modules execute,
-// conflict_retries, failed_writes and state_cache.
+// These tests check the parts of the store that need no execute: sorting the
+// failures of the database through load and write, write, register_schemas,
+// the verification of signatures, from_latest and ignored events with a
+// database, and that a subject scheme agrees with the database on every
+// character. The tests of execute, its conflicts and its retries, of failed
+// writes, which write and execute share, and of the state cache are in the
+// modules execute, conflict_retries, failed_writes and state_cache.
 //
 // The answers of the database come either from a real EventSourcingDB in a
 // container of each test's own (see database), or from a fake that answers the

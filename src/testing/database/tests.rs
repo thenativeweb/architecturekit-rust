@@ -1,9 +1,6 @@
-// These tests mirror TestIsolatedDatabase of the package dbtest of
-// ArchitectureKit for Go, and those of TestSharedDatabase that concern any
-// database: it hands out a store that writes and reads, registers the schemas
-// first, and fails the test for a schema it refuses. A shared database, and
-// Main to stop it, are not offered in Rust, and the options of a store come
-// from its builder.
+// These tests check the isolated database: it hands out a store that writes
+// and reads, registers the schemas first, and fails the test for a schema it
+// refuses. The options of a store come from its builder.
 
 use std::{panic::AssertUnwindSafe, pin::pin};
 
