@@ -2,7 +2,7 @@
 members = ["architecturekit-macros"]
 
 [workspace.package]
-version = "0.13.0"
+version = "0.14.0"
 edition = "2024"
 rust-version = "1.88"
 repository = "https://github.com/thenativeweb/architecturekit-rust"
@@ -35,7 +35,7 @@ testcontainers = ["testing", "eventsourcingdb/testcontainer"]
 testing = []
 
 [dependencies]
-architecturekit-macros = { path = "architecturekit-macros", version = "=0.13.0", optional = true }
+architecturekit-macros = { path = "architecturekit-macros", version = "=0.14.0", optional = true }
 chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 ed25519-dalek = "3.0.0"
 eventsourcingdb = "4.0.3"
