@@ -67,7 +67,8 @@ async fn refuses_to_lend_a_book_that_is_lent_out() {
 The feature `testing` also drives a projection with events in the shape the database stores them, without a database, and the same way a run does: the upcasters run, an event of a type the projection has no variant for is left out, an event an upcaster splits arrives part by part, and the projection learns of every event in `seen`. A test then reads what the projection built from its views:
 
 ```rust
-use architecturekit::testing::{project, stored_events};
+use architecturekit::{View, testing::{project, stored_events}};
+use futures::TryStreamExt;
 
 #[tokio::test]
 async fn lists_an_acquired_book() {
@@ -77,7 +78,8 @@ async fn lists_an_acquired_book() {
         .await
         .expect("the events are applied");
 
-    assert_eq!(book_list.titles.all(), ["2001"]);
+    let Ok(titles) = book_list.titles.all().try_collect::<Vec<_>>().await;
+    assert_eq!(titles, ["2001"]);
 }
 ```
 

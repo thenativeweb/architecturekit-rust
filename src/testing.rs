@@ -61,7 +61,7 @@
 //!
 //! A projection is driven with events in the shape the database stores them,
 //! without one (see [`project`] and [`StoredEvent`]), and what it built is
-//! read from its views, such as with `assert_eq!(view.all(), […])`.
+//! read from its views, such as by collecting [`View::all`](crate::View::all).
 
 #[cfg(feature = "testcontainers")]
 mod database;

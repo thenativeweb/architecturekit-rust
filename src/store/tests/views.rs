@@ -13,8 +13,8 @@ use std::{
 use futures_util::FutureExt;
 
 use crate::{
-    CancellationToken, Envelope, EventOn, ExecuteError, InMemoryView, Precondition, Projection,
-    ProjectionOptions, ResumableProjection, Revisioned, Subjects, Transient, ViewError,
+    CancellationToken, Envelope, EventOn, ExecuteError, InMemoryView, KeyedView, Precondition,
+    Projection, ProjectionOptions, ResumableProjection, Revisioned, Subjects, Transient, ViewError,
     wait_caught_up, wait_for_written,
 };
 
@@ -128,7 +128,8 @@ async fn project_increment_and_reset(
         .await
         .expect("the projection catches up");
 
-    let item = items.view.get(subject).expect("the counter is there");
+    let Ok(item) = items.view.get(subject).await;
+    let item = item.expect("the counter is there");
     let ids = written.iter().map(|event| event.id().to_owned()).collect();
 
     (item, ids)

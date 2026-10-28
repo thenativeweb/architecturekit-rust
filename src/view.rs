@@ -1,6 +1,7 @@
 use std::{
     borrow::Borrow,
     collections::HashMap,
+    convert::Infallible,
     error::Error,
     fmt::{self, Debug},
     future::{self, Future},
@@ -8,6 +9,7 @@ use std::{
     sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
+use futures_util::{Stream, stream};
 use tokio::sync::watch;
 
 use crate::{
@@ -21,12 +23,48 @@ mod tests;
 
 pub use index::InMemoryIndex;
 
+/// A collection of items that a query reads, wherever they live, in memory or
+/// in a database. [`InMemoryView`] is one.
+///
+/// Reading is asynchronous and may fail, as it does for a view in a database,
+/// so that code that reads a view works the same, whatever is behind it. A view
+/// in memory never fails, and names [`Infallible`] as its error.
+pub trait View<T>: Send + Sync {
+    /// The error with which reading fails.
+    type Error: Error + Categorized + Send + Sync + 'static;
+
+    /// Hands out every item, as a stream, so that a view in a database can
+    /// hand on the items as it reads them, rather than reading all of them
+    /// first. Every element is an item or an error, since such a view may also
+    /// fail halfway, for example when its connection breaks, and it ends after
+    /// an error.
+    ///
+    /// The steps of a query come from `TryStreamExt` of the `futures` crate,
+    /// such as `try_filter`, `map_ok`, `try_next` and `try_collect`. To order
+    /// the items, collect them first.
+    fn all(&self) -> impl Stream<Item = Result<T, Self::Error>> + Send;
+}
+
+/// A view that finds a single item by its key, without reading all of them.
+/// [`InMemoryView`] is one, for the type of its keys, and for every type that
+/// a key can be borrowed as, such as `str` for a `String`.
+pub trait KeyedView<K: ?Sized, T>: View<T> {
+    /// Returns the item with the given key, or `None` if there is none.
+    fn get(&self, key: &K) -> impl Future<Output = Result<Option<T>, Self::Error>> + Send;
+}
+
 /// Holds the items of a read model in memory, each under a key of its own. It
 /// is the one view the kit ships, and because it keeps no checkpoint, its
 /// projection is rebuilt on every start.
 ///
+/// It is read through [`View`] and [`KeyedView`], asynchronously, as a view in
+/// a database is, so that code that reads a view works the same for both. It
+/// never fails while it is read, so its error is [`Infallible`], and a reader
+/// needs no handling for it:
+///
 /// ```
-/// use architecturekit::InMemoryView;
+/// use architecturekit::{InMemoryView, KeyedView, View};
+/// use futures_util::TryStreamExt;
 ///
 /// #[derive(Clone, Debug, Default, PartialEq)]
 /// struct Book {
@@ -34,10 +72,16 @@ pub use index::InMemoryIndex;
 ///     title: String,
 /// }
 ///
+/// # let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+/// # runtime.block_on(async {
 /// let books = InMemoryView::new(|book: &Book| book.id.clone());
 ///
-/// assert_eq!(books.get("42"), None);
-/// assert!(books.all().is_empty());
+/// let Ok(book) = books.get("42").await;
+/// assert_eq!(book, None);
+///
+/// let Ok(all) = books.all().try_collect::<Vec<_>>().await;
+/// assert!(all.is_empty());
+/// # });
 /// ```
 ///
 /// Every item carries a revision of its own, which is the ID of the last event
@@ -70,12 +114,13 @@ pub use index::InMemoryIndex;
 /// only once the change is accepted. Every function that changes the view runs
 /// the functions it is given, such as a change, while it holds the lock of the
 /// view. So these functions must not call any function of the view or of its
-/// indexes, not even [`get`](InMemoryView::get) or
-/// [`all`](InMemoryView::all), since that blocks forever. A panic in one of
+/// indexes, not even [`get`](KeyedView::get) or
+/// [`all`](View::all), since that blocks forever. A panic in one of
 /// them leaves the view usable for those who read it.
 ///
-/// This is the stored shape, not the answer to a query. Use the iterators of
-/// Rust to filter, order and project it into whatever an answer needs.
+/// This is the stored shape, not the answer to a query. Use `TryStreamExt` of
+/// the `futures` crate on [`View::all`] to filter, order and project it into
+/// whatever an answer needs.
 pub struct InMemoryView<K, T> {
     shared: Arc<Shared<K, T>>,
 }
@@ -264,32 +309,6 @@ where
         });
     }
 
-    /// Returns a clone of the item with the given key, or `None` if there is
-    /// none.
-    pub fn get<Q>(&self, key: &Q) -> Option<T>
-    where
-        K: Borrow<Q>,
-        Q: Eq + Hash + ?Sized,
-    {
-        self.shared
-            .read()
-            .items
-            .get(key)
-            .map(|entry| entry.item.clone())
-    }
-
-    /// Returns clones of every item, in the order in which they were
-    /// inserted. A key that was deleted and inserted again comes at its new
-    /// position.
-    #[must_use]
-    pub fn all(&self) -> Vec<T> {
-        self.shared
-            .read()
-            .listed()
-            .map(|(_, entry)| entry.item.clone())
-            .collect()
-    }
-
     /// Adds an item for the given event, and reports what it did:
     /// [`Outcome::Added`] if it added the item, and
     /// [`Outcome::AlreadyApplied`] if it skipped the event, since an item with
@@ -390,8 +409,8 @@ where
     /// of the item on.
     ///
     /// The change runs while the view is locked, so it must not call any
-    /// function of the view, not even [`get`](InMemoryView::get) or
-    /// [`all`](InMemoryView::all), since that blocks forever. To copy data
+    /// function of the view, not even [`get`](KeyedView::get) or
+    /// [`all`](View::all), since that blocks forever. To copy data
     /// from another item of the view into this one, read it before, and use it
     /// in the change.
     ///
@@ -672,6 +691,48 @@ impl<K: Eq + Hash, T> Entries<K, T> {
         }
 
         self.order = order;
+    }
+}
+
+impl<K, T> View<T> for InMemoryView<K, T>
+where
+    K: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+{
+    type Error = Infallible;
+
+    /// Hands out clones of every item, in the order in which they were
+    /// inserted, where a key that was deleted and inserted again comes at its
+    /// new position. The items are cloned when `all` is called, so a query
+    /// can take its time without holding up the projection that feeds the
+    /// view.
+    fn all(&self) -> impl Stream<Item = Result<T, Infallible>> + Send {
+        let items: Vec<T> = self
+            .shared
+            .read()
+            .listed()
+            .map(|(_, entry)| entry.item.clone())
+            .collect();
+
+        stream::iter(items.into_iter().map(Ok))
+    }
+}
+
+impl<K, Q, T> KeyedView<Q, T> for InMemoryView<K, T>
+where
+    K: Borrow<Q> + Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    Q: Eq + Hash + ?Sized,
+    T: Clone + Send + Sync + 'static,
+{
+    /// Returns a clone of the item with the given key, or `None` if there is
+    /// none.
+    fn get(&self, key: &Q) -> impl Future<Output = Result<Option<T>, Infallible>> + Send {
+        future::ready(Ok(self
+            .shared
+            .read()
+            .items
+            .get(key)
+            .map(|entry| entry.item.clone())))
     }
 }
 

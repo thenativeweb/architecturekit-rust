@@ -63,7 +63,7 @@ pub use store::{
 };
 pub use subject::{SubjectScheme, SubjectValuesError};
 pub use upcast::{UpcastEvent, Upcasters};
-pub use view::{InMemoryIndex, InMemoryView, Outcome, ViewError};
+pub use view::{InMemoryIndex, InMemoryView, KeyedView, Outcome, View, ViewError};
 
 /// Stops a run of a projection from outside, as a `context.Context` does in
 /// ArchitectureKit for Go (see [`Store::start_projection`]).

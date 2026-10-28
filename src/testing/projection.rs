@@ -200,7 +200,8 @@ pub fn stored_events_at<E: Events>(
 /// #         Ok(())
 /// #     }
 /// # }
-/// use architecturekit::testing::{project, stored_events};
+/// use architecturekit::{View, testing::{project, stored_events}};
+/// use futures_util::TryStreamExt;
 ///
 /// # let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
 /// # runtime.block_on(async {
@@ -214,7 +215,8 @@ pub fn stored_events_at<E: Events>(
 /// .await
 /// .expect("the events are applied");
 ///
-/// assert_eq!(book_list.titles.all(), ["2001"]);
+/// let Ok(titles) = book_list.titles.all().try_collect::<Vec<_>>().await;
+/// assert_eq!(titles, ["2001"]);
 /// # });
 /// ```
 ///
