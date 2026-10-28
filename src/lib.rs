@@ -24,6 +24,8 @@ mod command;
 mod decider;
 mod error;
 mod event;
+#[cfg(feature = "http")]
+pub mod httpapi;
 mod projection;
 mod read;
 #[cfg(doctest)]

@@ -26,20 +26,25 @@ keywords = [
 categories = ["database"]
 
 [package.metadata.docs.rs]
-features = ["testcontainers"]
+features = ["axum", "testcontainers"]
 
 [features]
+axum = ["http", "dep:axum"]
 default = ["derive"]
 derive = ["dep:architecturekit-macros"]
+http = ["dep:bytes", "dep:http"]
 testcontainers = ["testing", "eventsourcingdb/testcontainer"]
 testing = []
 
 [dependencies]
 architecturekit-macros = { path = "architecturekit-macros", version = "=0.15.0", optional = true }
+axum = { version = "0.8.9", default-features = false, optional = true }
+bytes = { version = "1.12.1", optional = true }
 chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 ed25519-dalek = "3.0.0"
 eventsourcingdb = "4.0.3"
 futures-util = "0.3.31"
+http = { version = "1.5.0", optional = true }
 log = "0.4.27"
 serde = "1.0.229"
 serde_json = "1.0.154"
