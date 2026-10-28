@@ -1,37 +1,39 @@
 // These tests mirror TestInMemoryView, TestInMemoryIndex,
-// TestInMemoryIndexValues, TestOutcome, TestCloneWith, TestSplitEvents and
-// TestInMemoryViewRevision of ArchitectureKit for Go, under the same sentences.
-// Some do not apply to Rust:
+// TestInMemoryIndexValues, TestKeyedView, TestOutcome, TestCloneWith,
+// TestSplitEvents and TestInMemoryViewRevision of ArchitectureKit for Go,
+// under the same sentences. Some do not apply to Rust:
 //
 // - A function or an option can not be nil, and an option can not be given
 //   twice, since the field of the revision is given with the view.
-// - Reading hands out a Vec of clones, so there is no sequence that could go
-//   on after its caller stopped.
+// - Reading hands out a stream of items that were cloned when it was called,
+//   which stops as soon as its caller stops reading it.
 // - A change always works on a clone of the item, which replaces the item
 //   once the change is accepted, so CloneWith has nothing to switch on, and
 //   the compiler rules out a reader that reads while a change writes.
 // - The numbers of the outcomes and the zero outcome have no counterpart,
 //   since an Outcome is an enum, and an error comes without one.
 // - Waiting ends when its future is dropped, rather than with a context.
-// - TestKeyedView comes with the traits of the views that serve HTTP.
 // - The tests of RevisionIn against a database are part of the tests of the
 //   store.
 
 use std::{
+    borrow::Borrow,
     cell::{Cell, RefCell},
     collections::HashMap,
+    hash::Hash,
     sync::{Arc, LazyLock},
     time::Duration,
 };
 
 use chrono::DateTime;
-use futures_util::FutureExt;
+use futures_util::{FutureExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
-    Categorized, Category, Envelope, Event, Events, InMemoryIndex, InMemoryView, Outcome,
-    Projected, Revisioned, UpcastEvent, Upcasters, ViewError, projection::tests::stored,
+    Categorized, Category, Envelope, Event, Events, InMemoryIndex, InMemoryView, KeyedView,
+    Outcome, Projected, Revisioned, UpcastEvent, Upcasters, View, ViewError,
+    projection::tests::stored,
 };
 
 /// An item with a key, a value to index, and a field for its revision.
@@ -97,13 +99,50 @@ where
     );
 }
 
+/// Returns the item with the given key, which a view in memory knows at once.
+fn item_of<T, Q>(view: &InMemoryView<String, T>, key: &Q) -> Option<T>
+where
+    T: Clone + Send + Sync + 'static,
+    String: Borrow<Q>,
+    Q: Eq + Hash + ?Sized,
+{
+    let Some(Ok(item)) = view.get(key).now_or_never() else {
+        panic!("a view in memory knows its items at once");
+    };
+
+    item
+}
+
+/// Returns every item, which a view in memory hands out at once.
+fn all_of<T>(view: &InMemoryView<String, T>) -> Vec<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    let Some(Ok(items)) = view.all().try_collect::<Vec<_>>().now_or_never() else {
+        panic!("a view in memory hands out its items at once");
+    };
+
+    items
+}
+
+/// Returns what an index finds, which it hands out at once.
+fn looked_up<T>(index: &InMemoryIndex<String, T, String>, value: &str) -> Vec<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    let Some(Ok(items)) = index.lookup(value).try_collect::<Vec<_>>().now_or_never() else {
+        panic!("an index in memory hands out its items at once");
+    };
+
+    items
+}
+
 fn must_get(view: &InMemoryView<String, Book>, id: &str) -> Book {
-    view.get(id)
-        .unwrap_or_else(|| panic!("book {id:?} is missing"))
+    item_of(view, id).unwrap_or_else(|| panic!("book {id:?} is missing"))
 }
 
 fn ids_in(view: &InMemoryView<String, Book>) -> Vec<String> {
-    ids_of(&view.all())
+    ids_of(&all_of(view))
 }
 
 fn ids_of(books: &[Book]) -> Vec<String> {
@@ -113,7 +152,7 @@ fn ids_of(books: &[Book]) -> Vec<String> {
 /// Returns the revision of a view in memory, which is ready at once.
 fn current_revision<K, T>(view: &InMemoryView<K, T>) -> Option<String>
 where
-    K: Clone + std::fmt::Debug + Eq + std::hash::Hash + Send + Sync + 'static,
+    K: Clone + std::fmt::Debug + Eq + Hash + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
 {
     view.revision()
@@ -141,7 +180,7 @@ fn inserts_and_gets_items() {
     assert_eq!(got.title, "2001");
     assert_eq!(got.revision, "1");
 
-    assert_eq!(view.get("23"), None);
+    assert_eq!(item_of(&view, "23"), None);
 }
 
 #[test]
@@ -163,7 +202,7 @@ fn hands_out_a_copy() {
     let view = book_view();
     must_insert(&view, "1", Book::new("a"));
 
-    let items = view.all();
+    let items = all_of(&view);
     must_insert(&view, "2", Book::new("b"));
 
     // Writing while a query holds its result must not change what it holds.
@@ -287,7 +326,11 @@ fn refuses_to_change_the_key() {
         "kept",
         "a refused change must not be kept"
     );
-    assert_eq!(view.get("23"), None, "a refused change must not be kept");
+    assert_eq!(
+        item_of(&view, "23"),
+        None,
+        "a refused change must not be kept"
+    );
 }
 
 #[test]
@@ -385,7 +428,7 @@ fn deletes_an_item() {
     );
     assert_eq!(view.delete("42", &event("6")), Ok(Outcome::Applied));
 
-    assert_eq!(view.get("42"), None, "the book is still there");
+    assert_eq!(item_of(&view, "42"), None, "the book is still there");
 }
 
 #[test]
@@ -507,11 +550,11 @@ impl ViewFixture {
 
     fn state(&self) -> ViewState {
         ViewState {
-            items: self.view.all(),
+            items: all_of(&self.view),
             revision: current_revision(&self.view),
             shelves: ["left", "right", "nowhere"]
                 .into_iter()
-                .map(|shelf| (shelf, ids_of(&self.by_shelf.lookup(shelf))))
+                .map(|shelf| (shelf, ids_of(&looked_up(&self.by_shelf, shelf))))
                 .collect(),
         }
     }
@@ -808,8 +851,8 @@ fn looks_up_items_by_value() {
     must_insert(&view, "2", Book::new("b").on("right"));
     must_insert(&view, "3", Book::new("c").on("left"));
 
-    assert_eq!(ids_of(&by_shelf.lookup("left")), ["a", "c"]);
-    assert_eq!(by_shelf.lookup("nowhere"), Vec::<Book>::new());
+    assert_eq!(ids_of(&looked_up(&by_shelf, "left")), ["a", "c"]);
+    assert_eq!(looked_up(&by_shelf, "nowhere"), Vec::<Book>::new());
 }
 
 #[test]
@@ -823,8 +866,8 @@ fn follows_a_changed_value() {
         Ok(Outcome::Applied)
     );
 
-    assert_eq!(by_shelf.lookup("left"), Vec::<Book>::new());
-    assert_eq!(ids_of(&by_shelf.lookup("right")), ["a"]);
+    assert_eq!(looked_up(&by_shelf, "left"), Vec::<Book>::new());
+    assert_eq!(ids_of(&looked_up(&by_shelf, "right")), ["a"]);
 }
 
 #[test]
@@ -833,7 +876,7 @@ fn hands_out_a_copy_of_what_an_index_finds() {
     let by_shelf = view.index(|book| book.shelf.clone());
     must_insert(&view, "1", Book::new("a").on("left"));
 
-    let items = by_shelf.lookup("left");
+    let items = looked_up(&by_shelf, "left");
     must_insert(&view, "2", Book::new("b").on("left"));
 
     assert_eq!(
@@ -861,7 +904,7 @@ fn updates_and_deletes_by_value() {
 
     assert_eq!(by_shelf.delete("left", &event("10")), Ok(2));
 
-    assert_eq!(by_shelf.lookup("left"), Vec::<Book>::new());
+    assert_eq!(looked_up(&by_shelf, "left"), Vec::<Book>::new());
     assert_eq!(ids_in(&view), ["b"]);
 }
 
@@ -912,6 +955,48 @@ fn forgets_a_value_once_no_item_has_it() {
         HashMap::new(),
         "a value that a delete left behind is kept"
     );
+}
+
+#[tokio::test]
+async fn finds_an_item_by_its_key_through_the_interface() {
+    // A query takes the trait rather than the view, so that a view in a
+    // database can stand in for the one in memory later on.
+    async fn title_of<V: KeyedView<str, Book>>(view: &V, id: &str) -> Option<String> {
+        view.get(id)
+            .await
+            .expect("the view can be read")
+            .map(|book| book.title)
+    }
+
+    let view = book_view();
+    must_insert(&view, "1", Book::new("42").titled("Rendezvous with Rama"));
+
+    assert_eq!(
+        title_of(&view, "42").await.as_deref(),
+        Some("Rendezvous with Rama")
+    );
+    assert_eq!(
+        title_of(&view, "23").await,
+        None,
+        "a missing key has to be reported as missing"
+    );
+}
+
+#[tokio::test]
+async fn reads_every_item_through_the_interface() {
+    async fn titles_of<V: View<Book>>(view: &V) -> Vec<String> {
+        view.all()
+            .map_ok(|book| book.title)
+            .try_collect()
+            .await
+            .expect("the view can be read")
+    }
+
+    let view = book_view();
+    must_insert(&view, "1", Book::new("a").titled("Dune"));
+    must_insert(&view, "2", Book::new("b").titled("Solaris"));
+
+    assert_eq!(titles_of(&view).await, ["Dune", "Solaris"]);
 }
 
 #[test]
@@ -974,8 +1059,8 @@ fn hands_a_clone_to_every_change_of_an_existing_item() {
         let view = shelf_view();
         must_insert(&view, "1", ShelfItem::new("a"));
 
-        let got = view.get("a").expect("the shelf is there");
-        let items = view.all();
+        let got = item_of(&view, "a").expect("the shelf is there");
+        let items = all_of(&view);
 
         change(&view).unwrap_or_else(|failure| panic!("{name}: {failure}"));
 
@@ -987,7 +1072,7 @@ fn hands_a_clone_to_every_change_of_an_existing_item() {
             "{name}: an item that was listed"
         );
 
-        let rearranged = view.get("a").expect("the shelf is there");
+        let rearranged = item_of(&view, "a").expect("the shelf is there");
         assert_eq!(rearranged.book_ids, ["23"], "{name}");
         assert_eq!(rearranged.labels["genre"], "poetry", "{name}");
     }
@@ -1005,12 +1090,12 @@ fn keeps_an_index_on_data_that_a_change_writes_into() {
     );
 
     assert_eq!(
-        by_genre.lookup("fiction"),
+        looked_up(&by_genre, "fiction"),
         Vec::<ShelfItem>::new(),
         "the index must not find the shelf under its old value"
     );
     assert_eq!(
-        by_genre.lookup("poetry").len(),
+        looked_up(&by_genre, "poetry").len(),
         1,
         "the index has to find the shelf under its new value"
     );

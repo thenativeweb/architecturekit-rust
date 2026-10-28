@@ -224,3 +224,11 @@ impl Categorized for Permanent {
         Some(Category::Permanent)
     }
 }
+
+/// An error that can not occur, such as the one of reading a view in memory,
+/// belongs to no category.
+impl Categorized for std::convert::Infallible {
+    fn category(&self) -> Option<Category> {
+        match *self {}
+    }
+}

@@ -14,12 +14,13 @@ use std::{
 };
 
 use chrono::{DateTime, TimeDelta, Utc};
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
     Categorized, Category, Envelope, Event, Events, InMemoryView, Projection, ProjectionError,
-    Transaction, TransactionalProjection, UpcastEvent, Upcasters, ViewError,
+    Transaction, TransactionalProjection, UpcastEvent, Upcasters, View, ViewError,
     testing::{StoredEvent, project, project_transactional, stored_events, stored_events_at},
 };
 
@@ -70,6 +71,11 @@ fn closed() -> AccountEvent {
 
 fn owner_view() -> InMemoryView<String, String> {
     InMemoryView::new(String::clone)
+}
+
+async fn all_of(view: &InMemoryView<String, String>) -> Vec<String> {
+    let Ok(owners) = view.all().try_collect().await;
+    owners
 }
 
 /// The failure of a projection of a test.
@@ -294,7 +300,7 @@ async fn drives_a_projection() {
     .await
     .expect("the events are applied");
 
-    assert_eq!(owners.view.all(), ["golo", "jane"]);
+    assert_eq!(all_of(&owners.view).await, ["golo", "jane"]);
 }
 
 #[tokio::test]
@@ -327,7 +333,7 @@ async fn drives_a_typed_projection() {
     .await
     .expect("the events are applied");
 
-    assert_eq!(owners.view.all(), ["golo", "jane"]);
+    assert_eq!(all_of(&owners.view).await, ["golo", "jane"]);
 }
 
 #[tokio::test]
@@ -361,7 +367,7 @@ async fn takes_the_way_of_a_run() {
         .await
         .expect("the events are applied");
 
-    assert_eq!(owners.view.all(), ["golo", "jane"]);
+    assert_eq!(all_of(&owners.view).await, ["golo", "jane"]);
     assert_eq!(owners.seen(), ["1", "2"]);
 }
 

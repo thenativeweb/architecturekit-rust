@@ -1,10 +1,13 @@
 use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet},
+    convert::Infallible,
     fmt::{self, Debug},
     hash::Hash,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
+
+use futures_util::{Stream, stream};
 
 use super::{AppliedEvent, Entries, InMemoryView, Indexer, Shared, ViewError};
 use crate::Envelope;
@@ -38,6 +41,7 @@ where
     ///
     /// ```
     /// use architecturekit::InMemoryView;
+    /// use futures_util::TryStreamExt;
     ///
     /// #[derive(Clone, Debug, Default, PartialEq)]
     /// struct Book {
@@ -45,10 +49,14 @@ where
     ///     shelf: String,
     /// }
     ///
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    /// # runtime.block_on(async {
     /// let books = InMemoryView::new(|book: &Book| book.id.clone());
     /// let by_shelf = books.index(|book| book.shelf.clone());
     ///
-    /// assert!(by_shelf.lookup("A3").is_empty());
+    /// let Ok(on_a3) = by_shelf.lookup("A3").try_collect::<Vec<_>>().await;
+    /// assert!(on_a3.is_empty());
+    /// # });
     /// ```
     ///
     /// Add indexes before the view is used, since adding one reads every
@@ -86,19 +94,22 @@ where
     T: Clone + Send + Sync + 'static,
     V: Eq + Hash + Send + Sync + 'static,
 {
-    /// Returns clones of the items with the given value, in the order of the
-    /// view.
-    pub fn lookup<Q>(&self, value: &Q) -> Vec<T>
+    /// Hands out clones of the items with the given value, in the order of the
+    /// view, as a stream, as [`View::all`](crate::View::all) does. The items
+    /// are cloned when `lookup` is called, and handing them out never fails.
+    pub fn lookup<Q>(&self, value: &Q) -> impl Stream<Item = Result<T, Infallible>> + Send
     where
         V: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
         let entries = self.view.read();
-
-        self.keys_of(&entries, value)
+        let items: Vec<T> = self
+            .keys_of(&entries, value)
             .iter()
             .map(|key| entries.items[key].item.clone())
-            .collect()
+            .collect();
+
+        stream::iter(items.into_iter().map(Ok))
     }
 
     /// Changes every item with the given value for which the event is newer,
