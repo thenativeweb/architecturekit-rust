@@ -135,18 +135,3 @@ fn a_domain_error_is_its_message() {
     assert_eq!(refusal.to_string(), "book 42 is already borrowed");
     assert!(refusal.source().is_none());
 }
-
-#[test]
-fn an_error_type_that_only_refuses_is_of_the_domain_by_default() {
-    #[derive(Debug)]
-    enum BorrowRefused {
-        AlreadyBorrowed,
-    }
-
-    impl Categorized for BorrowRefused {}
-
-    assert_eq!(
-        BorrowRefused::AlreadyBorrowed.category(),
-        Some(Category::Domain)
-    );
-}

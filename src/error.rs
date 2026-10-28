@@ -40,24 +40,28 @@ impl fmt::Display for Category {
 /// The errors of architecturekit name theirs. The error of a decider names its
 /// own, so that a failure while loading something within the decision, which
 /// is a matter of the machinery, is told apart from a refusal, which is a
-/// matter of the domain. The default is [`Category::Domain`], so an error type
-/// that only refuses implements it without a body:
+/// matter of the domain. Every error type names its category itself, since no
+/// category fits every error: an error type that only refuses names
+/// [`Category::Domain`], and the error of a view in a database names
+/// [`Category::Transient`] for a failure that may pass.
 ///
 /// ```
-/// use architecturekit::Categorized;
+/// use architecturekit::{Categorized, Category};
 ///
 /// #[derive(Debug)]
 /// enum BorrowRefused {
 ///     AlreadyBorrowed,
 /// }
 ///
-/// impl Categorized for BorrowRefused {}
+/// impl Categorized for BorrowRefused {
+///     fn category(&self) -> Option<Category> {
+///         Some(Category::Domain)
+///     }
+/// }
 /// ```
 pub trait Categorized {
     /// Returns the category of the error, or `None` if it belongs to none.
-    fn category(&self) -> Option<Category> {
-        Some(Category::Domain)
-    }
+    fn category(&self) -> Option<Category>;
 }
 
 /// A business rule that refused a command, with a message for the caller.
@@ -88,7 +92,11 @@ impl fmt::Display for DomainError {
 
 impl Error for DomainError {}
 
-impl Categorized for DomainError {}
+impl Categorized for DomainError {
+    fn category(&self) -> Option<Category> {
+        Some(Category::Domain)
+    }
+}
 
 /// What failed, as in `reading "/books/42"`, and the error that caused it, if
 /// there is one, such as the error of the client SDK.

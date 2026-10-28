@@ -16,9 +16,7 @@ use super::{Health, time_of};
 use crate::{Phase, ProjectionError, ProjectionOptions, ProjectionRun, ProjectionStatus};
 
 fn run(name: &str) -> ProjectionRun {
-    ProjectionRun::new(ProjectionOptions {
-        name: Some(name.to_owned()),
-    })
+    ProjectionRun::new(ProjectionOptions::named(name))
 }
 
 fn live(name: &str) -> ProjectionRun {

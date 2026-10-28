@@ -393,7 +393,7 @@
 //!     Subjects::tree("/books"),
 //!     Arc::clone(&book_list),
 //!     token.clone(),
-//!     ProjectionOptions { name: Some("book list".to_owned()) },
+//!     ProjectionOptions::named("book list"),
 //! );
 //! wait_caught_up(&[&run]).await?;
 //! # Ok(())
