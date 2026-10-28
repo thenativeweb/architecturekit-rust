@@ -218,6 +218,14 @@ fn maps_what_wait_for_written_returns_once_the_time_has_run_out_to_500_not_to_50
 fn maps_a_value_that_is_not_a_revision_to_400_unless_it_is_a_permanent_failure() {
     assert_eq!(not_a_revision().status(), StatusCode::BAD_REQUEST);
 
+    // A command may declare a precondition on a revision that the caller
+    // handed over.
+    let in_a_precondition = HttpError::from(ExecuteError::<DomainError>::NotARevision(
+        parse_revision("abc").expect_err("abc is no revision"),
+    ));
+    assert_eq!(in_a_precondition.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(in_a_precondition.message(), r#"not a revision: "abc""#);
+
     // A view that is handed an event ID that is not a revision is the
     // server's mistake.
     let refusal = parse_revision("abc").expect_err("abc is no revision");
