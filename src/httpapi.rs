@@ -8,6 +8,7 @@
 //! an [`HttpError`], which every error of the kit turns into, with the status
 //! and the message ArchitectureKit for Go answers it with.
 
+mod answer;
 mod body;
 mod decoding;
 mod error;
@@ -15,7 +16,10 @@ mod error;
 mod extract;
 #[cfg(test)]
 mod logs;
+#[cfg(all(test, feature = "axum", feature = "testcontainers"))]
+mod tests;
 
+pub use answer::CommandAnswer;
 pub use body::{MAX_REQUEST_BODY, body_of, no_body};
 pub use error::HttpError;
 #[cfg(feature = "axum")]

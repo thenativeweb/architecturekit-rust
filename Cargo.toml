@@ -58,4 +58,5 @@ tokio-util = { version = "0.7.20", default-features = false }
 eventsourcingdb = { version = "4.0.3", features = ["testcontainer"] }
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+tower = { version = "0.5.3", features = ["util"] }
 url = "2.5.4"

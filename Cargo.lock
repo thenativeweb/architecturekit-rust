@@ -60,6 +60,7 @@ dependencies = [
  "serde_path_to_error",
  "tokio",
  "tokio-util",
+ "tower",
  "url",
 ]
 
