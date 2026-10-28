@@ -738,10 +738,9 @@ impl Store {
     }
 
     /// Reads the schemas the database holds, by event type. It reads all event
-    /// types to the end, and deliberately does not ask for a single one, as
-    /// ArchitectureKit for Go does not: after reading a single event type that
-    /// further event types follow, EventSourcingDB 1.2.0 stops answering
-    /// writes.
+    /// types to the end, and deliberately does not ask for a single one: after
+    /// reading a single event type that further event types follow,
+    /// EventSourcingDB 1.2.0 stops answering writes.
     async fn read_registered_schemas(
         &self,
     ) -> Result<HashMap<String, Value>, RegisterSchemasError> {

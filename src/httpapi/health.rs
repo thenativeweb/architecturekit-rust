@@ -15,8 +15,8 @@ use crate::{Phase, ProjectionRun, ProjectionStatus};
 mod tests;
 
 /// Answers whether the projections of a service are ready, or alive, for the
-/// probes of an orchestrator such as Kubernetes, as `Readiness` and `Liveness`
-/// do in ArchitectureKit for Go. With the feature `axum`, it is a handler:
+/// probes of an orchestrator such as Kubernetes. With the feature `axum`, it
+/// is a handler:
 ///
 /// ```
 /// # #[cfg(feature = "axum")]

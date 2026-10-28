@@ -1,7 +1,7 @@
 //! Decodes a request body strictly, and says what is wrong with one that does
-//! not fit in words of its own, as ArchitectureKit for Go does, rather than in
-//! those of serde, which name the types of Rust, such as `u32`, and positions
-//! in the text that a caller does not need.
+//! not fit in words of its own, rather than in those of serde, which name the
+//! types of Rust, such as `u32`, and positions in the text that a caller does
+//! not need.
 
 use std::{collections::HashSet, fmt};
 
@@ -59,9 +59,9 @@ pub(crate) fn decode_strictly<T: DeserializeOwned>(body: &[u8]) -> Result<T, Str
 
 /// Reads the body once as JSON of any shape, and refuses JSON that is not
 /// valid, data after the value, and a name that occurs twice in an object,
-/// before the body is decoded into its type, so that these come first, as
-/// they do in ArchitectureKit for Go. A number that no type can hold is left
-/// to the decoding, which says which value it is.
+/// before the body is decoded into its type, so that these come first. A
+/// number that no type can hold is left to the decoding, which says which
+/// value it is.
 fn scan(body: &[u8]) -> Result<(), String> {
     let mut deserializer = serde_json::Deserializer::from_slice(body);
     let mut duplicate = None;
@@ -253,7 +253,7 @@ fn describe(path: &serde_path_to_error::Path, failure: &serde_json::Error) -> St
 
     // What serde says in words of its own, which name the types of Rust, is
     // left out. Any other failure comes from a type that decodes itself, and
-    // its text is kept as it is, as in ArchitectureKit for Go.
+    // its text is kept as it is.
     if SERDE_FAILURES
         .iter()
         .any(|prefix| reason.starts_with(prefix))
@@ -338,8 +338,7 @@ fn describe_length(subject: &str, expected: &str) -> Option<String> {
     })
 }
 
-/// Names the kind of JSON value that serde expected, as ArchitectureKit for
-/// Go names it.
+/// Names the kind of JSON value that serde expected, in words of its own.
 fn kind_of(expected: &str) -> Option<&'static str> {
     if is_integer(expected) || matches!(expected, "f32" | "f64") {
         return Some("a number");

@@ -11,9 +11,9 @@ use crate::revision_of;
 #[cfg(test)]
 mod tests;
 
-/// The answer to a command that has succeeded, as ArchitectureKit for Go
-/// answers it: the revision it wrote, which is the ID of the last event, and
-/// which a caller hands to a query to read its own writes.
+/// The answer to a command that has succeeded: the revision it wrote, which is
+/// the ID of the last event, and which a caller hands to a query to read its
+/// own writes.
 ///
 /// ```json
 /// {"revision":"42"}
@@ -83,10 +83,10 @@ impl CommandAnswer {
     }
 
     /// Adds further fields next to the revision, such as the ID of what the
-    /// command created, as `Adding` does in ArchitectureKit for Go. The fields
-    /// are a value that encodes to a JSON object, usually a struct with
-    /// `#[derive(Serialize)]`. A value that encodes to `null` adds no fields,
-    /// and a later call replaces the fields of an earlier one.
+    /// command created. The fields are a value that encodes to a JSON object,
+    /// usually a struct with `#[derive(Serialize)]`. A value that encodes to
+    /// `null` adds no fields, and a later call replaces the fields of an
+    /// earlier one.
     ///
     /// The kit adds the revision itself, so the fields must not hold one. A
     /// value that holds a revision, that does not encode to a JSON object, or
@@ -102,11 +102,10 @@ impl CommandAnswer {
     }
 
     /// Adds the fields that a function returns, which may fail after the
-    /// command has succeeded, as `Adding` in ArchitectureKit for Go allows.
-    /// If it failed, the events are written all the same, so the answer stays
-    /// a success with the revision, which the caller needs to read its own
-    /// writes, and must not take for a reason to send the command again. The
-    /// failure is logged as an error.
+    /// command has succeeded. If it failed, the events are written all the
+    /// same, so the answer stays a success with the revision, which the caller
+    /// needs to read its own writes, and must not take for a reason to send the
+    /// command again. The failure is logged as an error.
     pub fn with_result<F, E>(self, fields: Result<F, E>) -> Self
     where
         F: Serialize,

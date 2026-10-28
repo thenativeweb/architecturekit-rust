@@ -10,9 +10,8 @@ mod tests;
 /// into memory in full before it is decoded, so it needs an upper bound.
 pub const MAX_REQUEST_BODY: usize = 1 << 20;
 
-/// Reads a request body as JSON of the given type, strictly, as
-/// ArchitectureKit for Go reads it, for a framework the kit has no extractor
-/// for. With axum, use [`Strict`](super::Strict).
+/// Reads a request body as JSON of the given type, strictly, for a framework
+/// the kit has no extractor for. With axum, use [`Strict`](super::Strict).
 ///
 /// # Errors
 ///
@@ -36,9 +35,8 @@ pub fn body_of<T: DeserializeOwned>(parts: &Parts, body: &[u8]) -> Result<T, Htt
     decode_strictly(body).map_err(HttpError::malformed)
 }
 
-/// Checks a request to a route that takes no body, as ArchitectureKit for Go
-/// checks it, for a framework the kit has no extractor for. With axum, use
-/// [`NoBody`](super::NoBody).
+/// Checks a request to a route that takes no body, for a framework the kit has
+/// no extractor for. With axum, use [`NoBody`](super::NoBody).
 ///
 /// # Errors
 ///
@@ -85,11 +83,10 @@ pub(crate) fn require_json(headers: &HeaderMap) -> Result<(), HttpError> {
     Ok(())
 }
 
-/// Refuses a request from another origin, as the cross-origin protection of
-/// Go's `net/http` does: a request with the method GET, HEAD or OPTIONS passes,
-/// one with a `Sec-Fetch-Site` header passes only for `same-origin` or `none`,
-/// and one without passes if it has no `Origin` header, or one whose host is
-/// the host of the request.
+/// Refuses a request that a browser sends from another origin: a request with
+/// the method GET, HEAD or OPTIONS passes, one with a `Sec-Fetch-Site` header
+/// passes only for `same-origin` or `none`, and one without passes if it has
+/// no `Origin` header, or one whose host is the host of the request.
 pub(crate) fn require_same_origin(parts: &Parts) -> Result<(), HttpError> {
     if matches!(parts.method, Method::GET | Method::HEAD | Method::OPTIONS) {
         return Ok(());
