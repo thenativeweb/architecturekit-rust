@@ -49,7 +49,21 @@ impl ProjectionOptions {
 /// The phases are closed on purpose: a caller that judges a run by its phase,
 /// as [`Health`](crate::httpapi::Health) does, has to place every one of them,
 /// so a new phase would come with a new major version rather than fall into a
-/// catch-all arm unnoticed.
+/// catch-all arm unnoticed:
+///
+/// ```
+/// use architecturekit::Phase;
+///
+/// fn is_ready(phase: Phase, has_caught_up: bool) -> bool {
+///     match phase {
+///         Phase::CatchingUp | Phase::Stopped => false,
+///         Phase::Live => true,
+///         Phase::Reconnecting => has_caught_up,
+///     }
+/// }
+///
+/// assert!(is_ready(Phase::Live, true));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     /// The projection applies the events stored so far.

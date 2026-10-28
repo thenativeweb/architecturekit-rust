@@ -1,5 +1,6 @@
-//! What the derive macros refuse, each as a doctest that must not compile. The
-//! module exists only while rustdoc collects doctests.
+//! What the derive macros and the types of the kit refuse, each as a doctest
+//! that must not compile. The module exists only while rustdoc collects
+//! doctests.
 
 /// An event needs its event type:
 ///
@@ -208,3 +209,56 @@ pub struct GenericEvents;
 /// }
 /// ```
 pub struct FieldWithoutSchema;
+
+/// An error type names its category itself, since no category fits every
+/// error:
+///
+/// ```compile_fail
+/// #[derive(Debug)]
+/// struct BorrowRefused;
+///
+/// impl architecturekit::Categorized for BorrowRefused {}
+/// ```
+pub struct CategoryOfAnError;
+
+/// The options of a projection may gain fields, so they are built with their
+/// functions, not with a literal, not even with the rest from the default:
+///
+/// ```compile_fail
+/// let options = architecturekit::ProjectionOptions {
+///     name: Some("book list".to_owned()),
+///     ..Default::default()
+/// };
+/// ```
+pub struct LiteralOptions;
+
+/// An envelope may gain fields, so it is built with `Envelope::new`, not with
+/// a literal:
+///
+/// ```compile_fail
+/// let envelope = architecturekit::Envelope {
+///     id: "0".to_owned(),
+///     time: chrono::DateTime::UNIX_EPOCH,
+///     source: "https://library.eventsourcingdb.io".to_owned(),
+///     subject: "/books/42".to_owned(),
+///     event_type: "io.eventsourcingdb.library.book-acquired".to_owned(),
+///     trace_parent: None,
+///     trace_state: None,
+///     part: 0,
+///     data: (),
+/// };
+/// ```
+pub struct LiteralEnvelope;
+
+/// A failure of a projection may gain fields, so a pattern names the fields it
+/// needs, and leaves the others to `..`:
+///
+/// ```compile_fail
+/// fn message_of(failure: &architecturekit::ProjectionError) -> Option<&str> {
+///     match failure {
+///         architecturekit::ProjectionError::Panicked { message } => Some(message),
+///         _ => None,
+///     }
+/// }
+/// ```
+pub struct PatternWithoutRest;
