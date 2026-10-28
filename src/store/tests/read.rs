@@ -287,6 +287,49 @@ async fn sorts_an_unreachable_database_as_transient() {
     assert_eq!(failure.category(), Some(Category::Transient), "{failure:?}");
 }
 
+#[tokio::test]
+async fn sorts_an_answer_that_does_not_come_from_an_eventsourcingdb_as_transient() {
+    // A proxy in front of the database answers on its behalf, for example
+    // while the database restarts, whatever its status says, so trying again
+    // may succeed.
+    for status in [403, 404, 502] {
+        let client = Fake::new(Api::V1)
+            .route(
+                READ_EVENTS,
+                Answer::Reply(Reply {
+                    is_from_eventsourcingdb: false,
+                    ..Reply::status(status, "from a proxy")
+                }),
+            )
+            .client()
+            .await;
+        let store = Store::builder(client, SOURCE).build();
+
+        let failure = read(
+            &store,
+            &Subjects::exact("/books/42"),
+            &ReadOptions::default(),
+        )
+        .await
+        .expect_err("the answer does not come from an EventSourcingDB");
+
+        assert!(
+            matches!(failure, ReadError::Transient(_)),
+            "{status}: {failure:?}"
+        );
+        assert!(
+            failure.to_string().contains(
+                r#"reading "/books/42": the answer does not come from an EventSourcingDB"#
+            ),
+            "{status}: {failure}"
+        );
+        assert!(
+            matches!(cause_of(&failure), Some(ClientError::InvalidServerHeader)),
+            "{status}: {failure:?}"
+        );
+    }
+}
+
 // Bounds.
 
 #[tokio::test]

@@ -211,10 +211,8 @@ async fn leaves_the_outcome_unknown_if_the_request_has_left_but_no_answer_says_t
  {
     const WRITTEN: &str = r#"[{"specversion":"1.0","id":"0","source":"https://thenativeweb.io"}]"#;
 
-    // Unlike the client SDK for Go, the one for Rust reports an error that
-    // does not come from an EventSourcingDB as the answer itself, and keeps to
-    // itself where it came from, so only an answer that reports success names
-    // its origin.
+    // An answer that does not come from an EventSourcingDB, such as one of a
+    // proxy in front of it, names that, whatever its status.
     for (name, answer, detail) in [
         ("the connection breaks", Answer::HangUp, None),
         (
@@ -248,12 +246,12 @@ async fn leaves_the_outcome_unknown_if_the_request_has_left_but_no_answer_says_t
         (
             "the answer does not come from an EventSourcingDB, such as a 502 of a proxy",
             Answer::Reply(Reply::foreign(502)),
-            Some("bad gateway"),
+            Some("the answer does not come from an EventSourcingDB"),
         ),
         (
             "the answer does not come from an EventSourcingDB, such as a 504 of a proxy",
             Answer::Reply(Reply::foreign(504)),
-            Some("bad gateway"),
+            Some("the answer does not come from an EventSourcingDB"),
         ),
         (
             "the answer does not come from an EventSourcingDB, although it reports success",
@@ -321,14 +319,14 @@ async fn follows_a_redirect_of_a_proxy_as_the_client_does() {
     // The client follows 301, 302, and 303 with a GET, which the database
     // refuses before writing. Unlike the client SDK for Go, the one for Rust
     // does not send the body once more for 307 and 308, and reports the
-    // redirect itself, which does not come from an EventSourcingDB, so whether
-    // the proxy passed the write on is unknown.
-    for (status, is_unknown, answered) in [
-        (301, false, 405),
-        (302, false, 405),
-        (303, false, 405),
-        (307, true, 307),
-        (308, true, 308),
+    // redirect itself as an answer that does not come from an EventSourcingDB,
+    // so whether the proxy passed the write on is unknown.
+    for (status, is_unknown) in [
+        (301, false),
+        (302, false),
+        (303, false),
+        (307, true),
+        (308, true),
     ] {
         for write in KitWrite::ALL {
             let client = Fake::new(Api::V1)
@@ -344,19 +342,23 @@ async fn follows_a_redirect_of_a_proxy_as_the_client_does() {
                 .await;
 
             let failure = refused(write, client, "a remark").await;
-            let Some(ClientError::DbApiError(answer)) = cause_of(&failure) else {
-                panic!("{write:?}, {status}: the source has to be the answer, got {failure:?}");
-            };
 
             if is_unknown {
                 assert_outcome_unknown(&failure, &format!("{write:?}, {status}"));
+                assert!(
+                    matches!(cause_of(&failure), Some(ClientError::InvalidServerHeader)),
+                    "{write:?}, {status}: the redirect does not come from an EventSourcingDB: {failure:?}"
+                );
             } else {
+                let Some(ClientError::DbApiError(answer)) = cause_of(&failure) else {
+                    panic!("{write:?}, {status}: the source has to be the answer, got {failure:?}");
+                };
                 assert!(
                     matches!(failure, Error::Permanent(_)),
                     "{write:?}, {status}: the database refused the GET before writing: {failure:?}"
                 );
+                assert_eq!(answer.status, 405, "{write:?}, {status}");
             }
-            assert_eq!(answer.status, answered, "{write:?}, {status}");
         }
     }
 }

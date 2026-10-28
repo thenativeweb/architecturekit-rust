@@ -42,7 +42,7 @@ axum = { version = "0.8.9", default-features = false, optional = true }
 bytes = { version = "1.12.1", optional = true }
 chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 ed25519-dalek = "3.0.0"
-eventsourcingdb = "4.0.3"
+eventsourcingdb = "4.0.4"
 futures-util = "0.3.31"
 http = { version = "1.5.0", optional = true }
 http-body-util = { version = "0.1.5", optional = true }
@@ -55,7 +55,7 @@ tokio = { version = "1.52.3", features = ["macros", "rt", "sync", "time"] }
 tokio-util = { version = "0.7.20", default-features = false }
 
 [dev-dependencies]
-eventsourcingdb = { version = "4.0.3", features = ["testcontainer"] }
+eventsourcingdb = { version = "4.0.4", features = ["testcontainer"] }
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
 tower = { version = "0.5.3", features = ["util"] }
