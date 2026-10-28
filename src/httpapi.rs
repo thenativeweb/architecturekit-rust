@@ -14,6 +14,7 @@ mod decoding;
 mod error;
 #[cfg(feature = "axum")]
 mod extract;
+mod health;
 #[cfg(test)]
 mod logs;
 mod reading;
@@ -24,5 +25,6 @@ pub use answer::CommandAnswer;
 pub use body::{MAX_REQUEST_BODY, body_of, no_body};
 pub use error::HttpError;
 #[cfg(feature = "axum")]
-pub use extract::{NoBody, Strict, query};
+pub use extract::{NoBody, Strict, answer_panic, query};
+pub use health::Health;
 pub use reading::{DEFAULT_WAIT, QueryAnswer, REVISION, Reading, WAIT_FOR_REVISION};

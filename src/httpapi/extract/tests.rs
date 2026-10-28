@@ -2,20 +2,28 @@
 // TestNoBodyFromAnotherOrigin of ArchitectureKit for Go that read a body: the
 // order of the checks, the limit of the kit and that of a layer, and a body
 // that can not be read. What a body has to look like is part of the tests of
-// the neutral functions.
+// the neutral functions. They also mirror the parts of TestPanicsInRoutes that
+// answer a panic, which a layer of tower-http catches. The stack of a panic is
+// not logged, since the hook of Rust prints it, as long as it is not replaced.
 
-use std::io;
+use std::{any::Any, io};
 
 use axum::{
+    Router,
     body::{Body, Bytes},
     extract::{FromRequest, Request},
+    routing::post,
 };
 use futures_util::stream;
 use http::StatusCode;
+use log::Level;
 use serde::Deserialize;
+use serde_json::{Value, json};
+use tower::ServiceExt;
+use tower_http::catch_panic::CatchPanicLayer;
 
-use super::{NoBody, Strict};
-use crate::httpapi::{HttpError, MAX_REQUEST_BODY};
+use super::{NoBody, Strict, answer_panic};
+use crate::httpapi::{HttpError, MAX_REQUEST_BODY, logs::captured};
 
 #[derive(Debug, Deserialize, PartialEq)]
 struct Preview {
@@ -144,4 +152,58 @@ async fn refuses_a_request_from_another_origin_before_it_reads_the_body() {
         .expect_err("another origin");
 
     assert_eq!(failure.status(), StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn answers_a_panic_with_500_and_logs_it_as_an_error() {
+    let payloads: [(Box<dyn Any + Send>, &str); 3] = [
+        (Box::new("the shelf is gone"), "the shelf is gone"),
+        (Box::new(String::from("book 42 is gone")), "book 42 is gone"),
+        (Box::new(42), "a value that is no text"),
+    ];
+
+    for (payload, message) in payloads {
+        let (answer, logged) = captured(|| answer_panic(payload));
+
+        assert_eq!(answer.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            logged,
+            vec![(
+                Level::Error,
+                format!(
+                    "architecturekit: internal failure, answered with 500: panic while handling the request: {message}"
+                ),
+            )]
+        );
+    }
+}
+
+/// Borrows a book, and panics, as a handler with a bug does.
+async fn borrow_book() -> &'static str {
+    tokio::task::yield_now().await;
+    panic!("the shelf is gone")
+}
+
+#[tokio::test]
+async fn answers_a_panic_of_a_handler_with_the_layer_of_tower_http() {
+    let router = Router::new()
+        .route("/books/borrow", post(borrow_book))
+        .layer(CatchPanicLayer::custom(answer_panic));
+
+    let answer = router
+        .oneshot(
+            Request::post("/books/borrow")
+                .body(Body::empty())
+                .expect("the request is valid"),
+        )
+        .await
+        .expect("the router answers");
+
+    assert_eq!(answer.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(answer.headers()["cache-control"], "no-store");
+    let body = axum::body::to_bytes(answer.into_body(), usize::MAX)
+        .await
+        .expect("the body can be read");
+    let body: Value = serde_json::from_slice(&body).expect("the answer is JSON");
+    assert_eq!(body, json!({ "message": "internal server error" }));
 }

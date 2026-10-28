@@ -59,4 +59,5 @@ eventsourcingdb = { version = "4.0.3", features = ["testcontainer"] }
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
 tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["catch-panic"] }
 url = "2.5.4"
