@@ -1,4 +1,4 @@
-use std::{convert::Infallible, error::Error, future};
+use std::{any::Any, convert::Infallible, error::Error, future};
 
 use axum::{
     RequestExt,
@@ -179,4 +179,35 @@ async fn only_query(request: Request, next: Next) -> Response {
         .insert(header::ALLOW, HeaderValue::from_static("QUERY"));
 
     response
+}
+
+/// Answers a panic of a handler with 500 and the fixed text
+/// `internal server error`, and logs it as an error, as ArchitectureKit for Go
+/// does. A handler of axum belongs to the application, so the kit catches no
+/// panic itself: use this with the layer `CatchPanicLayer` of tower-http. It
+/// needs the feature `axum`.
+///
+/// ```
+/// # use axum::{Router, routing::post};
+/// # async fn borrow_book() {}
+/// use architecturekit::httpapi::answer_panic;
+/// use tower_http::catch_panic::CatchPanicLayer;
+///
+/// let router: Router = Router::new()
+///     .route("/books/borrow", post(borrow_book))
+///     .layer(CatchPanicLayer::custom(answer_panic));
+/// ```
+#[must_use]
+pub fn answer_panic(payload: Box<dyn Any + Send + 'static>) -> Response {
+    let message = payload
+        .downcast::<String>()
+        .map(|message| *message)
+        .or_else(|payload| {
+            payload
+                .downcast::<&str>()
+                .map(|message| (*message).to_owned())
+        })
+        .unwrap_or_else(|_| "a value that is no text".to_owned());
+
+    HttpError::internal(format!("panic while handling the request: {message}")).into_response()
 }
