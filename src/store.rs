@@ -26,7 +26,7 @@ use crate::{
 mod any;
 mod error;
 mod failure;
-mod projecting;
+pub(crate) mod projecting;
 
 use projecting::Reconnecting;
 mod state_cache;

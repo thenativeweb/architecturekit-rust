@@ -1,5 +1,5 @@
-//! Given-when-then for deciders, and a database in a container for the tests
-//! that need a real one. The module needs the feature `testing`, and
+//! Given-when-then for deciders, driving projections with stored events, and
+//! a database in a container for the tests that need a real one. The module needs the feature `testing`, and
 //! [`Database`] the feature `testcontainers`, which turns on `testing` as well,
 //! so that a test that only checks a decider builds without Docker.
 //!
@@ -58,11 +58,19 @@
 //!
 //! An assertion that does not hold panics with a message that says what was
 //! expected and what was decided, as `assert_eq!` does.
+//!
+//! A projection is driven with events in the shape the database stores them,
+//! without one (see [`project`] and [`StoredEvent`]), and what it built is
+//! read from its views, such as with `assert_eq!(view.all(), […])`.
 
 #[cfg(feature = "testcontainers")]
 mod database;
 mod fixture;
+mod projection;
 
 #[cfg(feature = "testcontainers")]
 pub use database::Database;
 pub use fixture::{Decision, Fixture, given, given_stored};
+pub use projection::{
+    StoredEvent, project, project_transactional, stored_events, stored_events_at,
+};

@@ -36,7 +36,7 @@ testing = []
 
 [dependencies]
 architecturekit-macros = { path = "architecturekit-macros", version = "=0.13.0", optional = true }
-chrono = { version = "0.4.45", default-features = false }
+chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 ed25519-dalek = "3.0.0"
 eventsourcingdb = "4.0.3"
 futures-util = "0.3.31"
@@ -47,7 +47,6 @@ tokio = { version = "1.52.3", features = ["macros", "rt", "sync", "time"] }
 tokio-util = { version = "0.7.20", default-features = false }
 
 [dev-dependencies]
-chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
 eventsourcingdb = { version = "4.0.3", features = ["testcontainer"] }
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
