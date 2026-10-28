@@ -151,14 +151,23 @@ async fn books_on_shelf(
         .await
 }
 
+/// Answers the books on a shelf as of the day that the header `x-day` names,
+/// which the answer depends on besides the revision and the query.
 async fn books_on_shelf_today(
     State(app): State<App>,
     _: Caller,
+    headers: HeaderMap,
     reading: Reading,
     Strict(query): Strict<BooksOnShelf>,
 ) -> Result<QueryAnswer<Vec<Book>>, HttpError> {
+    let today = headers
+        .get("x-day")
+        .and_then(|day| day.to_str().ok())
+        .unwrap_or("Tuesday")
+        .to_owned();
+
     reading
-        .varying("Tuesday")
+        .varying(today)
         .revisioned(&*app.books, &query, app.wait, || async {
             Ok(QueryAnswer::new(books_on(&app, &query.shelf).await))
         })
@@ -647,14 +656,32 @@ async fn a_failing_query_carries_no_revision() {
 #[tokio::test]
 async fn an_answer_that_depends_on_more_than_the_revision_varies_its_tag() {
     let router = router(app_with(Duration::ZERO));
-    let (_, plain, _) = send(&router, asking("/books/on-shelf", r#"{"shelf":"A"}"#, &[])).await;
-    let (_, varying, _) = send(
-        &router,
-        asking("/books/on-shelf-today", r#"{"shelf":"A"}"#, &[]),
-    )
-    .await;
+    let tag_on = |day: &'static str| {
+        let router = router.clone();
+        async move {
+            let (_, headers, _) = send(
+                &router,
+                asking(
+                    "/books/on-shelf-today",
+                    r#"{"shelf":"A"}"#,
+                    &[("x-day", day)],
+                ),
+            )
+            .await;
+            headers[header::ETAG].clone()
+        }
+    };
 
-    assert_ne!(plain[header::ETAG], varying[header::ETAG]);
+    assert_eq!(
+        tag_on("Tuesday").await,
+        tag_on("Tuesday").await,
+        "the same day gives the same tag"
+    );
+    assert_ne!(
+        tag_on("Tuesday").await,
+        tag_on("Wednesday").await,
+        "another day gives another tag"
+    );
 }
 
 #[tokio::test]
