@@ -1,9 +1,7 @@
-// These tests mirror TestRespond, the parts of TestRouteAnswers that need no
-// route, and the rules of Adding in ArchitectureKit for Go. What concerns
-// wiring does not apply: there is no function to be nil, and a later call of
-// with replaces the fields of an earlier one, rather than panicking. A value
-// that is nil in Go is None or the unit in Rust, and serde_json encodes NaN
-// as null, rather than failing on it.
+// These tests check the answer to a command that has succeeded, without a
+// route, and the fields next to its revision: a later call of with replaces
+// the fields of an earlier one, None and the unit add no fields, and
+// serde_json encodes NaN as null, rather than failing on it.
 
 use bytes::Bytes;
 use http::{Response, StatusCode, header};

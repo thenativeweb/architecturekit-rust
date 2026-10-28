@@ -1,8 +1,7 @@
-//! A real EventSourcingDB in a container of a test's own, as the isolated
-//! database of ArchitectureKit for Go. The container stops once the test drops
-//! it, so nothing is left behind, which a container that all tests share would
-//! not manage: Rust never drops a static, and the client SDK for Rust has no
-//! reaper that removes containers once the tests have run.
+//! A real EventSourcingDB in a container of a test's own. The container stops
+//! once the test drops it, so nothing is left behind, which a container that
+//! all tests share would not manage: Rust never drops a static, and the client
+//! SDK has no reaper that removes containers once the tests have run.
 //!
 //! It runs with a signing key, unlike the database of the feature
 //! `testcontainers`, so that its events can be verified by their signatures.

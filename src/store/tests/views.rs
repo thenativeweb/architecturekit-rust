@@ -1,9 +1,8 @@
-// These tests mirror the tests of TestRevisionIn of ArchitectureKit for Go
-// that need a database: the revision an item keeps fits a precondition on its
-// subject only if the item follows every event of it. They also mirror "resumes
-// from the checkpoint" of TestTracking, and "waits for what Execute wrote in a
-// view whose projection is tracked" of TestWaitForWritten, for a projection
-// that records what it has seen in its view.
+// These tests check the revision that an item of a view keeps, against a
+// database: it fits a precondition on its subject only if the item follows
+// every event of it. They also check resuming from the checkpoint, and
+// waiting for what execute wrote, for a projection that records what it has
+// seen in its view.
 
 use std::{
     sync::{Arc, Mutex},

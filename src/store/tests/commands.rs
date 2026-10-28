@@ -1,6 +1,6 @@
-//! The command of the tests, and what they need around it, as the test domain
-//! of ArchitectureKit for Go has it: a command that increments the counter of
-//! its subject, deciders for it, and ways to read and write past the kit.
+//! The command of the tests, and what they need around it: a command that
+//! increments the counter of its subject, deciders for it, and ways to read and
+//! write past the kit.
 
 use std::{
     error::Error,
@@ -289,8 +289,8 @@ pub(super) async fn event_types_in(database: &Database, subject: &str) -> Vec<St
     event_types
 }
 
-/// Returns the messages of an error and all of its sources, joined as Go joins
-/// them, so that a test can look for what a cause says.
+/// Returns the messages of an error and all of its sources, joined by colons,
+/// so that a test can look for what a cause says.
 pub(super) fn chain(error: &dyn Error) -> String {
     let mut messages = vec![error.to_string()];
     let mut source = error.source();

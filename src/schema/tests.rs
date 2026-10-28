@@ -1,40 +1,8 @@
-// These tests mirror TestDeriveSchema, TestDeriveSchemaPanics, TestSchemaOf
-// and TestDeriveSchemaAgreesWithEncodingJSON of ArchitectureKit for Go, under
-// the same sentences, and expect the same schemas for equivalent types. The
-// cases that describe what only Go has do not apply to Rust:
-//
-// - "makes a field with the string option a string": serde has no string
-//   option, and the schema of a field marked with serialize_with can not be
-//   derived.
-// - "describes a []byte as a string, which may be null": serde writes a
-//   Vec<u8> as an array of integers (see
-//   describes_a_vec_of_bytes_as_an_array_of_integers).
-// - "describes a type with MarshalText as a string", "describes a type with
-//   AppendText as a string", and "describes a slice that encodes itself as
-//   text as a string, which is never null": a type that writes itself as text
-//   implements Schema by hand.
-// - "describes a json.Number as a number, and as a string with the string
-//   option": see describes_a_serde_json_number_as_a_number.
-// - "allows any value for an interface with a Schema function": serde can not
-//   write a trait object.
-// - "describes a field type by a Schema function with a pointer receiver":
-//   Rust has no pointer receivers.
-// - "leaves out an embedded unexported type that is not a struct", "lifts the
-//   fields of an embedded struct", "makes the fields of an embedded pointer
-//   optional", "keeps an embedded struct with a tag as a field", "lets the
-//   least deeply embedded field win", "lets the only tagged field win among
-//   equally deep ones", "leaves out a name that equally deep fields share", and
-//   "leaves out the fields of a struct embedded twice at the same depth", and
-//   their counterparts in TestDeriveSchemaAgreesWithEncodingJSON: Rust has no
-//   embedding, and the schema of a field marked with flatten can not be
-//   derived (see the refusals, which are doctests).
-// - "does not call the own Schema function of the type itself": a Rust type
-//   has exactly one Schema.
-// - "returns a schema that belongs to the caller" and "returns the shape
-//   encoding/json decodes into": schema returns a serde_json::Value of its own.
-// - TestDeriveSchemaPanics, except for recursive types: what Go refuses at run
-//   time, the derive macros refuse at compile time (see the refusals), or
-//   serde can not write in the first place.
+// These tests check the schemas that the derive macros derive, and that they
+// describe what serde writes. A type that writes itself as text, and a field
+// marked with serialize_with or flatten, need a Schema by hand, since their
+// schemas can not be derived (see the refusals, which are doctests). What the
+// derive macros refuse, they refuse at compile time.
 
 // Most types here exist only for their schemas, so they are never built.
 #![allow(dead_code)]

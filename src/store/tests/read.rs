@@ -1,13 +1,11 @@
-// These tests mirror TestRead, TestReadBounds, TestReadNewestFirst,
-// TestReadFromLatestEvent, TestReadWithInvalidEventIDs, and
-// TestReadEmptyRangesAgainstTheDatabase of ArchitectureKit for Go, and show
-// that Store::read refuses what check_read_options refuses before it asks the
-// database, whose own tests cover every range. Every test has a database of
-// its own, so the IDs of its events start at "0".
+// These tests check reading: its bounds, the newest event first, reading from
+// the latest event, IDs that are not revisions, and empty ranges against the
+// database. They show that Store::read refuses what check_read_options refuses
+// before it asks the database, whose own tests cover every range. Every test
+// has a database of its own, so the IDs of its events start at "0".
 //
 // A stream that the caller drops stops reading, as a dropped future does, so
-// "stops when the caller stops" reads part of a stream only. The zero value of
-// Subjects can not be written.
+// "stops when the caller stops" reads part of a stream only.
 
 use std::pin::pin;
 

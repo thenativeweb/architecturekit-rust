@@ -1,14 +1,6 @@
-// These tests mirror TestSubjectScheme and TestSubjectSchemeValue of
-// ArchitectureKit for Go, under the same sentences. Some do not apply to Rust:
-//
-// - "reports its placeholders" checks that the returned names are a copy,
-//   which the borrow checker makes a given for the slice placeholders returns.
-// - "refuses values with characters the database does not allow" has a case
-//   for invalid UTF-8, which a &str can not hold.
-// - "agrees with the database on every character" needs write, so it comes
-//   with the store.
-//
-// Messages quote values the way Rust does, with {:?}, where Go uses %q.
+// These tests check SubjectScheme and its values. "agrees with the database
+// on every character" needs write, so it comes with the store. Messages quote
+// values the way Rust does, with {:?}.
 
 use std::{
     collections::HashMap,
@@ -63,12 +55,12 @@ fn workshops() -> SubjectScheme {
 fn builds_and_matches() {
     let scheme = workshops();
 
-    let subject = scheme.build(&["acme", "go-cqrs"]);
-    assert_eq!(subject, "/tenant/acme/workshop/go-cqrs");
+    let subject = scheme.build(&["acme", "es-cqrs"]);
+    assert_eq!(subject, "/tenant/acme/workshop/es-cqrs");
 
     let values = scheme.match_subject(&subject).expect("the subject matches");
     assert_eq!(values["tenant"], "acme");
-    assert_eq!(values["workshop"], "go-cqrs");
+    assert_eq!(values["workshop"], "es-cqrs");
 }
 
 #[test]
@@ -92,14 +84,14 @@ fn rejects_subjects_that_do_not_fit() {
     let scheme = workshops();
 
     for (name, subject) in [
-        ("no leading slash", "tenant/acme/workshop/go-cqrs"),
+        ("no leading slash", "tenant/acme/workshop/es-cqrs"),
         ("too few segments", "/tenant/acme/workshop"),
-        ("too many segments", "/tenant/acme/workshop/go-cqrs/more"),
-        ("literal does not match", "/client/acme/workshop/go-cqrs"),
+        ("too many segments", "/tenant/acme/workshop/es-cqrs/more"),
+        ("literal does not match", "/client/acme/workshop/es-cqrs"),
         ("empty placeholder value", "/tenant/acme/workshop/"),
         (
             "value with a character the database refuses",
-            "/tenant/acme/workshop/go.cqrs",
+            "/tenant/acme/workshop/es.cqrs",
         ),
     ] {
         assert!(
@@ -344,15 +336,15 @@ fn says_which_characters_a_value_may_contain() {
 
     assert_eq!(
         scheme
-            .check(&["acme", "go.cqrs"])
+            .check(&["acme", "es.cqrs"])
             .expect_err("a dot is refused")
             .to_string(),
-        r#"value "go.cqrs" for "workshop" may only contain A-Z, a-z, 0-9, underscores, and hyphens"#,
+        r#"value "es.cqrs" for "workshop" may only contain A-Z, a-z, 0-9, underscores, and hyphens"#,
     );
     assert_eq!(
-        panic_message(|| drop(scheme.build(&["acme", "go.cqrs"]))).as_deref(),
+        panic_message(|| drop(scheme.build(&["acme", "es.cqrs"]))).as_deref(),
         Some(concat!(
-            r#"architecturekit: value "go.cqrs" for "workshop" in "/tenant/{tenant}/workshop/{workshop}" "#,
+            r#"architecturekit: value "es.cqrs" for "workshop" in "/tenant/{tenant}/workshop/{workshop}" "#,
             "may only contain A-Z, a-z, 0-9, underscores, and hyphens",
         )),
     );
@@ -373,22 +365,22 @@ fn names_only_the_placeholder_when_it_checks_but_the_crate_and_the_pattern_when_
         ),
         (
             "too many values",
-            vec!["acme", "go-cqrs", "more"],
+            vec!["acme", "es-cqrs", "more"],
             "the subject needs 2 value(s), got 3",
             r#"architecturekit: pattern "/tenant/{tenant}/workshop/{workshop}" needs 2 value(s), got 3"#,
         ),
         (
             "an empty value",
-            vec!["", "go-cqrs"],
+            vec!["", "es-cqrs"],
             r#"value for "tenant" must not be empty"#,
             r#"architecturekit: value for "tenant" in "/tenant/{tenant}/workshop/{workshop}" must not be empty"#,
         ),
         (
             "a value with a character the database does not allow",
-            vec!["acme", "go/cqrs"],
-            r#"value "go/cqrs" for "workshop" may only contain A-Z, a-z, 0-9, underscores, and hyphens"#,
+            vec!["acme", "es/cqrs"],
+            r#"value "es/cqrs" for "workshop" may only contain A-Z, a-z, 0-9, underscores, and hyphens"#,
             concat!(
-                r#"architecturekit: value "go/cqrs" for "workshop" in "/tenant/{tenant}/workshop/{workshop}" "#,
+                r#"architecturekit: value "es/cqrs" for "workshop" in "/tenant/{tenant}/workshop/{workshop}" "#,
                 "may only contain A-Z, a-z, 0-9, underscores, and hyphens",
             ),
         ),
@@ -564,12 +556,12 @@ fn takes_the_value_of_a_placeholder_out_of_a_subject() {
     let scheme = workshops();
 
     assert_eq!(
-        scheme.value("/tenant/acme/workshop/go-cqrs", "tenant"),
+        scheme.value("/tenant/acme/workshop/es-cqrs", "tenant"),
         Some("acme")
     );
     assert_eq!(
-        scheme.value("/tenant/acme/workshop/go-cqrs", "workshop"),
-        Some("go-cqrs")
+        scheme.value("/tenant/acme/workshop/es-cqrs", "workshop"),
+        Some("es-cqrs")
     );
 }
 
@@ -578,10 +570,10 @@ fn reports_none_for_a_subject_that_does_not_follow_the_pattern_as_match_subject_
     let scheme = workshops();
 
     for subject in [
-        "tenant/acme/workshop/go-cqrs",
+        "tenant/acme/workshop/es-cqrs",
         "/tenant/acme/workshop",
-        "/client/acme/workshop/go-cqrs",
-        "/tenant/acme/workshop/go.cqrs",
+        "/client/acme/workshop/es-cqrs",
+        "/tenant/acme/workshop/es.cqrs",
     ] {
         assert!(scheme.match_subject(subject).is_none(), "{subject:?}");
         assert_eq!(scheme.value(subject, "tenant"), None, "{subject:?}");
@@ -595,7 +587,7 @@ fn panics_for_a_placeholder_the_pattern_does_not_have() {
 
     assert_eq!(
         panic_message(|| {
-            let _ = scheme.value("/tenant/acme/workshop/go-cqrs", "tennant");
+            let _ = scheme.value("/tenant/acme/workshop/es-cqrs", "tennant");
         })
         .as_deref(),
         Some(message),

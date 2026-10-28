@@ -1,7 +1,5 @@
-// These tests mirror TestErrUnverified and TestCategoryTexts of ArchitectureKit
-// for Go. Go names its categories with sentinel errors, whose texts become the
-// beginning of every error of the category; in Rust, Category has these texts,
-// and the failures begin with them.
+// These tests check the categories of failures and their texts: Category has
+// the text of each category, and every failure of a category begins with it.
 
 use std::error::Error;
 

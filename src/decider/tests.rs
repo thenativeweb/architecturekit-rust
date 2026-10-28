@@ -1,6 +1,5 @@
-// These tests mirror TestNewDecider of ArchitectureKit for Go. Not applicable:
-// a nil state, a nil function, and the zero value of a Decider (TestDecider),
-// since a Decider can only be made from a function, and its state is its type.
+// These tests check Decider. A Decider can only be made from a function, and
+// its state is its type.
 
 use std::sync::Arc;
 

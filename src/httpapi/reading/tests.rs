@@ -1,17 +1,9 @@
-// These tests mirror TestQuery, TestQueryMethod, TestRevisioned,
-// TestIfNoneMatch, TestIfNoneMatchWithABody, TestTagsOfCallers, TestAwait,
-// TestAwaiting and TestVarying of ArchitectureKit for Go, with routes of axum
-// that the tests build from the building blocks of the kit, over a view in
-// memory. Some do not apply to Rust:
-//
-// - What Go checks about wiring a query does not apply, since a route is an
-//   ordinary handler of axum: a nil API, function, view or option, an option
-//   given twice, and a pattern without a method, or with another one.
-// - A request that is over is dropped, so there is no context of a request to
-//   wait or to read the revision within.
-// - The tag spells out a query as JSON rather than by reflection, so what Go
-//   checks about spelling out values, such as unexported fields and cycles,
-//   does not apply. A query that can not be encoded goes without a tag.
+// These tests check answering queries, with routes of axum that the tests
+// build from the building blocks of the kit, over a view in memory: QUERY as
+// the method, waiting for a revision, tags and 304, the tags of callers, and
+// answers that vary. A request that is over is dropped, so there is no request
+// to wait or to read the revision within. The tag spells out a query as JSON,
+// so a query that can not be encoded goes without a tag.
 
 use std::{
     future,

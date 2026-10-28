@@ -1,10 +1,6 @@
-// These tests mirror TestTypedProjection of ArchitectureKit for Go, through
-// Projected, which turns a stored event into what a projection gets. A
-// projection names its events as an enum or as the stored event, so what Go
-// checks while a typed projection is being built has nothing to check in
-// Rust: a nil handler, a pointer or an interface as the event type, two
-// handlers for one type, and calling UpcastWith twice or without a set. A
-// projection is resumable by its trait, not by embedding.
+// These tests check typed projections through Projected, which turns a stored
+// event into what a projection gets. A projection names its events as an enum
+// or as the stored event, and is resumable by its trait.
 
 use std::sync::LazyLock;
 

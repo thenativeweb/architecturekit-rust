@@ -1,7 +1,6 @@
-// These tests mirror TestAFailedWrite and TestAStallWhileWaitingForTheAnswer of
-// ArchitectureKit for Go, for executing and for writing, which fail alike. The
-// failures come from a fake (see fake), since the client SDK does not let a
-// test make them itself.
+// These tests check failed writes, and a stall while waiting for the answer,
+// for executing and for writing, which fail alike. The failures come from a
+// fake (see fake), since the client SDK does not let a test make them itself.
 
 use std::time::Duration;
 
@@ -317,10 +316,10 @@ async fn keeps_the_error_of_the_client_reachable_when_the_outcome_is_unknown() {
 #[tokio::test]
 async fn follows_a_redirect_of_a_proxy_as_the_client_does() {
     // The client follows 301, 302, and 303 with a GET, which the database
-    // refuses before writing. Unlike the client SDK for Go, the one for Rust
-    // does not send the body once more for 307 and 308, and reports the
-    // redirect itself as an answer that does not come from an EventSourcingDB,
-    // so whether the proxy passed the write on is unknown.
+    // refuses before writing. It does not send the body once more for 307 and
+    // 308, and reports the redirect itself as an answer that does not come
+    // from an EventSourcingDB, so whether the proxy passed the write on is
+    // unknown.
     for (status, is_unknown) in [
         (301, false),
         (302, false),
