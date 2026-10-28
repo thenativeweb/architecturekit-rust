@@ -727,9 +727,9 @@ dependencies = [
 
 [[package]]
 name = "eventsourcingdb"
-version = "4.0.3"
+version = "4.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7b69ca37dae7c33e0150ec0a75699734de46f0cc25767977b555da2883b32b1"
+checksum = "e5af1ad801415172fadc80aeb95acc39b604afb135193989a5164ba55b62ca33"
 dependencies = [
  "bytes",
  "chrono",
