@@ -16,6 +16,7 @@ mod error;
 mod extract;
 #[cfg(test)]
 mod logs;
+mod reading;
 #[cfg(all(test, feature = "axum", feature = "testcontainers"))]
 mod tests;
 
@@ -23,4 +24,5 @@ pub use answer::CommandAnswer;
 pub use body::{MAX_REQUEST_BODY, body_of, no_body};
 pub use error::HttpError;
 #[cfg(feature = "axum")]
-pub use extract::{NoBody, Strict};
+pub use extract::{NoBody, Strict, query};
+pub use reading::{DEFAULT_WAIT, QueryAnswer, REVISION, Reading, WAIT_FOR_REVISION};

@@ -151,6 +151,17 @@ impl HttpError {
         &self.message
     }
 
+    /// An item that a query looked up, and did not find, answered with 404 and
+    /// the fixed text `not found`, since nothing says what was not found. It is
+    /// logged as information.
+    pub(crate) fn nothing_found() -> Self {
+        Self::refused(
+            StatusCode::NOT_FOUND,
+            "not found",
+            "nothing was found".into(),
+        )
+    }
+
     /// A mistake of the program, answered with 500 and a fixed text, and
     /// logged as an error.
     pub(crate) fn internal(cause: impl Into<Cause>) -> Self {
