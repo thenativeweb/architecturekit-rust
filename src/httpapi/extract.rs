@@ -1,14 +1,19 @@
-use std::error::Error;
+use std::{convert::Infallible, error::Error, future};
 
 use axum::{
     RequestExt,
-    extract::{FromRequest, Request},
+    extract::{FromRequest, FromRequestParts, Request},
+    handler::Handler,
+    http::{HeaderValue, Method, StatusCode, header, request::Parts},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{MethodRouter, any},
 };
 use futures_util::StreamExt;
 use serde::de::DeserializeOwned;
 
 use super::{
-    HttpError, MAX_REQUEST_BODY,
+    HttpError, MAX_REQUEST_BODY, Reading,
     body::{body_of, no_body, require_json, require_same_origin, too_large},
 };
 
@@ -121,4 +126,57 @@ fn exceeds_a_limit(failure: &axum::Error) -> bool {
     }
 
     false
+}
+
+/// Takes what a query reads from the request (see [`Reading::of`]). It needs
+/// the feature `axum`.
+impl<S: Send + Sync> FromRequestParts<S> for Reading {
+    type Rejection = Infallible;
+
+    fn from_request_parts(
+        parts: &mut Parts,
+        _: &S,
+    ) -> impl Future<Output = Result<Self, Infallible>> + Send {
+        future::ready(Ok(Self::of(parts)))
+    }
+}
+
+/// Routes the method QUERY to the handler, as `get` and `post` of axum route
+/// theirs, and answers every other method with 405. A query asks with QUERY
+/// in ArchitectureKit for Go, which sends its parameters as a body, as POST
+/// does, but changes nothing, as GET does. It needs the feature `axum`.
+///
+/// ```
+/// # use axum::Router;
+/// # async fn books_on_shelf() -> &'static str { "[]" }
+/// use architecturekit::httpapi::query;
+///
+/// let router: Router = Router::new().route("/books/on-shelf", query(books_on_shelf));
+/// ```
+///
+/// axum names no filter for QUERY before version 0.9, so the route takes
+/// every method, and answers every other one itself, with the method it
+/// allows in the header `Allow`.
+pub fn query<H, T, S>(handler: H) -> MethodRouter<S>
+where
+    H: Handler<T, S>,
+    T: 'static,
+    S: Clone + Send + Sync + 'static,
+{
+    any(handler).layer(middleware::from_fn(only_query))
+}
+
+/// Lets a request with the method QUERY through, and answers any other one
+/// with 405.
+async fn only_query(request: Request, next: Next) -> Response {
+    if request.method() == Method::QUERY {
+        return next.run(request).await;
+    }
+
+    let mut response = StatusCode::METHOD_NOT_ALLOWED.into_response();
+    let _ = response
+        .headers_mut()
+        .insert(header::ALLOW, HeaderValue::from_static("QUERY"));
+
+    response
 }
