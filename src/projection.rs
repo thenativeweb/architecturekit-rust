@@ -20,7 +20,12 @@ pub use run::{
 /// data is decoded into that enum, after the upcasters of the projection have
 /// run. For one whose events are `eventsourcingdb::Event`, the data is the
 /// event as it is stored, with its hash, and no upcasters run.
+///
+/// It may gain fields, so it can not be built outside the kit with a literal.
+/// A test that applies an event to a view directly builds one with
+/// [`new`](Envelope::new), and changes its fields as it needs.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Envelope<E> {
     /// The ID of the event, which is the ID of the stored event, also for every
     /// event an upcaster splits it into.
@@ -43,6 +48,51 @@ pub struct Envelope<E> {
     pub part: usize,
     /// The data of the event.
     pub data: E,
+}
+
+/// The source of the events that a test makes up.
+pub(crate) const MADE_UP_SOURCE: &str = "https://architecturekit.test";
+
+impl<E: Events> Envelope<E> {
+    /// An envelope of the given event, with the given subject and ID, as part
+    /// 0, written at the beginning of 1970, from the source
+    /// `https://architecturekit.test`, and without a trace, for a test that
+    /// applies an event to a view directly:
+    ///
+    /// ```
+    /// # use architecturekit::{Event, Events};
+    /// # use serde::{Deserialize, Serialize};
+    /// # #[derive(Serialize, Deserialize, Event)]
+    /// # #[event(type = "io.eventsourcingdb.library.book-acquired")]
+    /// # struct BookAcquired { title: String }
+    /// # #[derive(Events)]
+    /// # enum BookEvent { Acquired(BookAcquired) }
+    /// use architecturekit::{Envelope, InMemoryView};
+    ///
+    /// let titles = InMemoryView::new(String::clone);
+    /// let envelope = Envelope::new(
+    ///     "/books/42",
+    ///     "0",
+    ///     BookEvent::Acquired(BookAcquired { title: "2001".to_owned() }),
+    /// );
+    /// let BookEvent::Acquired(acquired) = &envelope.data;
+    /// titles.insert(&envelope, acquired.title.clone())?;
+    /// # Ok::<(), architecturekit::ViewError>(())
+    /// ```
+    #[must_use]
+    pub fn new(subject: &str, id: &str, data: E) -> Self {
+        Self {
+            id: id.to_owned(),
+            time: DateTime::UNIX_EPOCH,
+            source: MADE_UP_SOURCE.to_owned(),
+            subject: subject.to_owned(),
+            event_type: data.event_type().to_owned(),
+            trace_parent: None,
+            trace_state: None,
+            part: 0,
+            data,
+        }
+    }
 }
 
 mod sealed {
@@ -337,8 +387,10 @@ pub trait Transaction: Send {
     fn rollback(self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
-/// Why a projection failed.
+/// Why a projection failed. It may gain variants and fields, so match it with
+/// a catch-all arm, or ask for its category.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ProjectionError {
     /// Reading the events failed, and trying again later may succeed.
     Transient(Transient),
@@ -347,11 +399,13 @@ pub enum ProjectionError {
     Permanent(Permanent),
     /// The projection panicked, with the given message. It is permanent, since
     /// it would panic again, also together with a failure that may pass.
+    #[non_exhaustive]
     Panicked {
         /// The value the projection panicked with, if it is text.
         message: String,
     },
     /// The projection itself failed, with the category its error names.
+    #[non_exhaustive]
     Projection {
         /// The category of the error.
         category: Option<Category>,
@@ -362,6 +416,7 @@ pub enum ProjectionError {
     /// Rolling back a transaction failed after another failure, which the
     /// failure of the rollback is reported alongside, never instead of. Its
     /// category is the one of the failure that made it roll back.
+    #[non_exhaustive]
     RolledBack {
         /// The failure that made the transaction roll back.
         cause: Box<ProjectionError>,

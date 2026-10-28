@@ -10,8 +10,18 @@ use tokio::sync::watch;
 
 use crate::{Categorized, Category, ProjectionError};
 
-/// How a projection is started.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// How a projection is started. Build it with [`named`](ProjectionOptions::named)
+/// or [`default`](Default::default), which leaves the projection without a
+/// name:
+///
+/// ```
+/// use architecturekit::ProjectionOptions;
+///
+/// let options = ProjectionOptions::named("book list");
+/// assert_eq!(options.name.as_deref(), Some("book list"));
+/// ```
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct ProjectionOptions {
     /// The name of the projection, which its run, its status, and the
     /// failures it reports name. A projection without a name is told apart by
@@ -19,7 +29,27 @@ pub struct ProjectionOptions {
     pub name: Option<String>,
 }
 
+impl ProjectionOptions {
+    /// Options for a projection with the given name.
+    ///
+    /// # Panics
+    ///
+    /// A name that is empty is a programming error, so starting a projection
+    /// with it panics.
+    #[must_use]
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+        }
+    }
+}
+
 /// Where a run of a projection stands.
+///
+/// The phases are closed on purpose: a caller that judges a run by its phase,
+/// as [`Health`](crate::httpapi::Health) does, has to place every one of them,
+/// so a new phase would come with a new major version rather than fall into a
+/// catch-all arm unnoticed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     /// The projection applies the events stored so far.
@@ -35,7 +65,9 @@ pub enum Phase {
 }
 
 /// The status of a run of a projection, as [`ProjectionRun::status`] returns it.
+/// It may gain fields, so it can not be built outside the kit.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ProjectionStatus {
     /// Where the run stands.
     pub phase: Phase,
@@ -247,10 +279,13 @@ fn caught_up_verdict(runs: &[&ProjectionRun]) -> Option<Result<(), CaughtUpError
     })
 }
 
-/// Why [`wait_caught_up`] failed.
+/// Why [`wait_caught_up`] failed. It may gain variants and fields, so match it
+/// with a catch-all arm, or ask for its category.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum CaughtUpError {
     /// A run ended with a failure before it caught up.
+    #[non_exhaustive]
     Failed {
         /// The name of the projection, if it has one.
         projection: Option<String>,
@@ -259,6 +294,7 @@ pub enum CaughtUpError {
     },
     /// A run stopped before it caught up, because its token was cancelled. It
     /// belongs to no category.
+    #[non_exhaustive]
     Stopped {
         /// The name of the projection, if it has one.
         projection: Option<String>,
@@ -310,8 +346,9 @@ impl Categorized for CaughtUpError {
 /// An attempt of a projection to read again, after reading failed, which
 /// includes a stream of events that ended, as the observer set with
 /// [`StoreBuilder::reconnect_observer`](crate::StoreBuilder::reconnect_observer)
-/// receives it.
+/// receives it. It may gain fields, so it can not be built outside the kit.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Reconnect {
     /// The name of the projection, or `None` if it has none, in which case
     /// [`subject`](Reconnect::subject) tells it apart.

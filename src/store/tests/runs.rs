@@ -226,9 +226,7 @@ fn observed(client: Client, max_delay: Duration) -> (Store, Reconnects) {
 }
 
 fn named(name: &str) -> ProjectionOptions {
-    ProjectionOptions {
-        name: Some(name.to_owned()),
-    }
+    ProjectionOptions::named(name)
 }
 
 async fn increment(store: &Store, subject: &str, count: usize) -> Vec<String> {

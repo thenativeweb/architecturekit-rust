@@ -5,14 +5,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     Events, Projection, ProjectionError, TransactionalProjection,
+    projection::MADE_UP_SOURCE as SOURCE,
     store::projecting::{RebuildWriter, TransactionalWriter, Writer, drive},
 };
 
 #[cfg(test)]
 mod tests;
-
-/// The source of the events a test stores.
-const SOURCE: &str = "https://architecturekit.test";
 
 /// An event in the shape the database hands it back, to drive a projection
 /// without one (see [`project`]). It needs the feature `testing`.
@@ -42,6 +40,7 @@ const SOURCE: &str = "https://architecturekit.test";
 /// It turns into an `eventsourcingdb::Event` with `into`, whose hash is no
 /// real one, so verifying it fails.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct StoredEvent {
     /// The ID of the event.
     pub id: String,
