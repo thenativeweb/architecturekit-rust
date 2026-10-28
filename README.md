@@ -62,6 +62,27 @@ async fn refuses_to_lend_a_book_that_is_lent_out() {
 
 `then_failed` compares the error of the decider, which therefore implements `PartialEq` and `Debug`. Events are compared by their type and the JSON of their data, which is what would be stored, so they need no `PartialEq`.
 
+## Testing Projections
+
+The feature `testing` also drives a projection with events in the shape the database stores them, without a database, and the same way a run does: the upcasters run, an event of a type the projection has no variant for is left out, an event an upcaster splits arrives part by part, and the projection learns of every event in `seen`. A test then reads what the projection built from its views:
+
+```rust
+use architecturekit::testing::{project, stored_events};
+
+#[tokio::test]
+async fn lists_an_acquired_book() {
+    let book_list = BookList::new();
+
+    project(&book_list, &stored_events("/books/42", [BookEvent::Acquired(BookAcquired { title: "2001".to_owned() })]))
+        .await
+        .expect("the events are applied");
+
+    assert_eq!(book_list.titles.all(), ["2001"]);
+}
+```
+
+`project` returns the failure of the projection, so that a test can check that a projection refuses an event. The fields of a `StoredEvent` are public, so that a test can give an event a type the projection does not know, data it can not read, or a time of its own. `project_transactional` drives a transactional projection within one transaction.
+
 ## License
 
 architecturekit is licensed under the [MIT License](LICENSE.md).
