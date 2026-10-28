@@ -1,8 +1,9 @@
 use std::{convert::Infallible, error::Error, fmt};
 
 use bytes::Bytes;
-use http::{HeaderValue, Response, StatusCode, header};
+use http::{Response, StatusCode};
 
+use super::answer::json;
 use crate::{
     Categorized, Category, EmptyRange, ExecuteError, LoadError, NotARevision, NotCaughtUp,
     PreconditionsError, ReadError, ReadOptionsError, RegisterSchemasError, Transient, WriteError,
@@ -150,6 +151,16 @@ impl HttpError {
         &self.message
     }
 
+    /// A mistake of the program, answered with 500 and a fixed text, and
+    /// logged as an error.
+    pub(crate) fn internal(cause: impl Into<Cause>) -> Self {
+        Self::failed(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error",
+            cause.into(),
+        )
+    }
+
     /// A failure whose message the caller is told, and which is not logged.
     fn told(status: StatusCode, message: String) -> Self {
         Self {
@@ -218,18 +229,10 @@ impl From<HttpError> for Response<Bytes> {
     fn from(error: HttpError) -> Self {
         error.log();
 
-        let body = format!("{}\n", serde_json::json!({ "message": error.message }));
-        let mut response = Response::new(Bytes::from(body));
-        *response.status_mut() = error.status;
-
-        let headers = response.headers_mut();
-        let _ = headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        let _ = headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-
-        response
+        json(
+            error.status,
+            &serde_json::json!({ "message": error.message }),
+        )
     }
 }
 
@@ -331,7 +334,7 @@ impl From<Infallible> for HttpError {
 }
 
 /// An error followed by its sources, as a log shows it.
-struct Chain<'e>(Option<&'e (dyn Error + Send + Sync + 'static)>);
+pub(super) struct Chain<'e>(pub(super) Option<&'e (dyn Error + Send + Sync + 'static)>);
 
 impl fmt::Display for Chain<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
