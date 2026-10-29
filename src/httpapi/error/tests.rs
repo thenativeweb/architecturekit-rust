@@ -9,7 +9,7 @@
 //   neither the method nor the route, which a handler does not know when it
 //   answers.
 
-use std::{convert::Infallible, error::Error, fmt, time::Duration};
+use std::{convert::Infallible, error::Error, fmt};
 
 use bytes::Bytes;
 use http::{Response, StatusCode, header};
@@ -17,9 +17,9 @@ use log::Level;
 
 use super::HttpError;
 use crate::{
-    Categorized, Category, DomainError, ExecuteError, Failure, LoadError, LowerBound, NotCaughtUp,
-    Permanent, ReadOptions, Revision, Subject, SubjectScheme, Transient, UpperBound,
-    check_read_options, httpapi::logs::captured,
+    Categorized, Category, DomainError, ExecuteError, Failure, LoadError, LowerBound, Permanent,
+    ReadOptions, Revision, Subject, SubjectScheme, Transient, UpperBound, check_read_options,
+    httpapi::logs::captured,
 };
 
 /// An error of a category the test names, as an application has one.
@@ -134,11 +134,6 @@ fn every_kind() -> Vec<(&'static str, HttpError, StatusCode)> {
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
         (
-            "a view that did not catch up",
-            NotCaughtUp::<Infallible>::TimedOut(Duration::from_secs(5)).into(),
-            StatusCode::INTERNAL_SERVER_ERROR,
-        ),
-        (
             "a conflict",
             ExecuteError::<DomainError>::Transient(conflict()).into(),
             StatusCode::CONFLICT,
@@ -216,22 +211,6 @@ fn prefers_conflict_over_its_category() {
 #[test]
 fn maps_an_unknown_outcome_to_500_also_if_it_wraps_a_status_that_invites_trying_again() {
     let error = HttpError::from(outcome_unknown(Some(transient())));
-
-    assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
-}
-
-#[test]
-fn maps_a_view_that_did_not_catch_up_to_500_also_if_it_wraps_a_status_that_invites_trying_again() {
-    let error = HttpError::from(NotCaughtUp::View(transient()));
-
-    assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
-}
-
-#[test]
-fn maps_what_wait_for_written_returns_once_the_time_has_run_out_to_500_not_to_503() {
-    let error = HttpError::from(NotCaughtUp::<Infallible>::TimedOut(Duration::from_millis(
-        50,
-    )));
 
     assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -413,11 +392,6 @@ fn answers_an_internal_failure_with_a_fixed_text_and_logs_it_as_an_error() {
             outcome_unknown(Some(transient())).into(),
             "outcome unknown: the request may have succeeded",
         ),
-        (
-            "a view that did not catch up",
-            NotCaughtUp::View(transient()).into(),
-            "the request succeeded, but its result is not visible yet",
-        ),
     ] {
         let status = error.status();
         let (response, logged) = answered(error);
@@ -491,4 +465,14 @@ fn passes_on_the_error_of_a_view_in_memory() {
     }
 
     assert_eq!(read().expect("reading never fails"), 42);
+}
+
+#[test]
+fn maps_an_error_of_a_decider_in_a_box_by_the_category_of_the_error() {
+    let refusal = HttpError::from(ExecuteError::Decider(Box::new(DomainError::new(
+        "the book is lent out",
+    ))));
+
+    assert_eq!(refusal.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refusal.message(), "the book is lent out");
 }

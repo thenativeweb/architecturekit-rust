@@ -387,7 +387,7 @@ async fn reports_a_disruption_keeps_its_beginning_and_is_live_again() {
     eventually("a disruption", || run.status().phase == Phase::Reconnecting).await;
     let first = run.status();
     assert_eq!(
-        first.error.as_ref().and_then(|error| error.category()),
+        first.error.as_ref().and_then(Categorized::category),
         Some(Category::Transient)
     );
     eventually("another attempt", || run.status().attempts >= 2).await;

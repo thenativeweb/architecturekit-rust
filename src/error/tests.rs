@@ -1,7 +1,7 @@
 // These tests check the categories of failures and their texts: Category has
 // the text of each category, and every failure of a category begins with it.
 
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 use crate::{
     Categorized, Category, DomainError, Failure, NotARevision, Permanent, Revision, Transient,
@@ -135,4 +135,24 @@ fn a_domain_error_is_its_message() {
 
     assert_eq!(refusal.to_string(), "book 42 is already borrowed");
     assert!(refusal.source().is_none());
+}
+
+/// Returns the category of the error through the impl of its very type, which
+/// a method call would bypass by dereferencing.
+fn category_of<E: Categorized>(error: &E) -> Option<Category> {
+    error.category()
+}
+
+#[test]
+fn a_reference_a_box_and_an_arc_have_the_category_of_the_error() {
+    let refusal = DomainError::new("the book is lent out");
+    let failure: Box<dyn Categorized> = Box::new(Transient::Other(Failure::new("reading", None)));
+
+    assert_eq!(category_of(&&refusal), Some(Category::Domain));
+    assert_eq!(
+        category_of(&Box::new(refusal.clone())),
+        Some(Category::Domain)
+    );
+    assert_eq!(category_of(&Arc::new(refusal)), Some(Category::Domain));
+    assert_eq!(category_of(&failure), Some(Category::Transient));
 }
