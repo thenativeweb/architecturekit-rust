@@ -149,7 +149,7 @@ impl<S: State, D: fmt::Debug> Decision<S, D> {
     /// Returns the events the decider decided on, or the error the command
     /// failed with, for what the assertions do not check, such as the category
     /// of an error, or a refusal of the kit, as in
-    /// `assert!(matches!(decision.result(), Err(ExecuteError::NotARevision(_))))`.
+    /// `assert!(matches!(decision.result(), Err(ExecuteError::Permanent(_))))`.
     ///
     /// # Errors
     ///
@@ -380,7 +380,6 @@ fn describe_failure<D: fmt::Debug>(failure: &ExecuteError<D>) -> String {
         ExecuteError::OutcomeUnknown(failure) => {
             format!("outcome unknown: {}", failure.message())
         }
-        ExecuteError::NotARevision(refusal) => chain(refusal),
     }
 }
 

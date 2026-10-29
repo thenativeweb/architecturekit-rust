@@ -10,7 +10,7 @@ use http::{StatusCode, header};
 use serde_json::{Value, json};
 
 use super::Health;
-use crate::{Phase, ProjectionError, ProjectionOptions, ProjectionRun, ProjectionStatus};
+use crate::{Phase, ProjectionError, ProjectionOptions, ProjectionRun, ProjectionStatus, Revision};
 
 fn run(name: &str) -> ProjectionRun {
     ProjectionRun::new(ProjectionOptions::named(name))
@@ -154,7 +154,7 @@ fn answers_with_json_that_must_not_be_cached() {
 #[test]
 fn tells_where_each_projection_stands_but_not_why() {
     let run = live("catalog");
-    run.committed("42");
+    run.committed(Revision::from(42));
     run.disrupted(unreachable());
     let since = run.status().since;
 

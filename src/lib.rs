@@ -273,7 +273,7 @@
 //! #         vec![architecturekit::Precondition::on_state_read()]
 //! #     }
 //! # }
-//! use architecturekit::{Envelope, InMemoryView, Projection, ViewError};
+//! use architecturekit::{Envelope, InMemoryView, Projection, Revision, ViewError};
 //! use serde::Serialize;
 //!
 //! #[derive(Clone, Default, Serialize)]
@@ -313,7 +313,7 @@
 //!         Ok(())
 //!     }
 //!
-//!     fn seen(&self, event_id: &str) {
+//!     fn seen(&self, event_id: Revision) {
 //!         self.books.seen(event_id);
 //!     }
 //! }
@@ -378,7 +378,7 @@
 //! #         }
 //! #         Ok(())
 //! #     }
-//! #     fn seen(&self, event_id: &str) { self.books.seen(event_id); }
+//! #     fn seen(&self, event_id: architecturekit::Revision) { self.books.seen(event_id); }
 //! # }
 //! # async fn example(store: architecturekit::Store) -> Result<(), Box<dyn std::error::Error>> {
 //! use std::sync::Arc;
@@ -486,7 +486,7 @@
 //! #         }
 //! #         Ok(())
 //! #     }
-//! #     fn seen(&self, event_id: &str) { self.books.seen(event_id); }
+//! #     fn seen(&self, event_id: architecturekit::Revision) { self.books.seen(event_id); }
 //! # }
 //! use std::sync::Arc;
 //!
@@ -604,7 +604,7 @@
 //! #         }
 //! #         Ok(())
 //! #     }
-//! #     fn seen(&self, event_id: &str) { self.books.seen(event_id); }
+//! #     fn seen(&self, event_id: architecturekit::Revision) { self.books.seen(event_id); }
 //! # }
 //! # use std::sync::Arc;
 //! #
@@ -735,7 +735,7 @@
 //! #         }
 //! #         Ok(())
 //! #     }
-//! #     fn seen(&self, event_id: &str) { self.books.seen(event_id); }
+//! #     fn seen(&self, event_id: architecturekit::Revision) { self.books.seen(event_id); }
 //! # }
 //! # use std::sync::Arc;
 //! #
@@ -953,7 +953,7 @@
 //! #         }
 //! #         Ok(())
 //! #     }
-//! #     fn seen(&self, event_id: &str) { self.books.seen(event_id); }
+//! #     fn seen(&self, event_id: architecturekit::Revision) { self.books.seen(event_id); }
 //! # }
 //! # #[cfg(feature = "testing")]
 //! # {
@@ -1040,8 +1040,7 @@ pub use read::{
     UpperBound, check_read_options,
 };
 pub use revision::{
-    NotARevision, NotCaughtUp, Revisioned, compare_revisions, parse_revision, revision_of,
-    wait_for_written,
+    NotARevision, NotCaughtUp, Revision, Revisioned, revision_of, wait_for_written,
 };
 pub use schema::Schema;
 pub use state::{EventSchema, Events, State, replay, replay_stored, step, step_stored};

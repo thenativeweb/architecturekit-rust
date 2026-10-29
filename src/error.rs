@@ -17,8 +17,8 @@ mod tests;
 ///
 /// - A write whose outcome is unknown may have stored its events, so it must
 ///   not be tried again blindly.
-/// - A value of the caller that is not a revision or not a subject, and bounds
-///   of a read that leave no room for an event, mean that the request is wrong.
+/// - A text of the caller that can not be read as a revision, and bounds of a
+///   read that leave no room for an event, mean that the request is wrong.
 /// - A view that has not caught up with a write tells that the write succeeded,
 ///   but its result is not visible yet.
 /// - A run of a projection that stopped because its token was cancelled did

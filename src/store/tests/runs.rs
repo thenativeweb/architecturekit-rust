@@ -21,12 +21,13 @@ use super::{
     commands::SOURCE,
     database::{Database, subject_for},
     fake::{Answer, Api, Fake, Reply, dead_client},
+    revision_of_event,
 };
 use crate::{
     CancellationToken, Categorized, Category, CaughtUpError, Envelope, EventOn, Phase,
     Precondition, Projection, ProjectionError, ProjectionOptions, ProjectionRun, Reconnect,
-    ResumableProjection, Store, StoreBuilder, Subjects, Transaction, TransactionalProjection,
-    wait_caught_up,
+    ResumableProjection, Revision, Store, StoreBuilder, Subjects, Transaction,
+    TransactionalProjection, wait_caught_up,
 };
 
 const READ_EVENTS: &str = "/api/v1/read-events";
@@ -91,17 +92,17 @@ enum Trouble {
 /// checkpoint, as every event as it is stored.
 #[derive(Debug, Default)]
 struct Applied {
-    ids: Mutex<Vec<String>>,
-    saved: Mutex<Vec<String>>,
+    ids: Mutex<Vec<Revision>>,
+    saved: Mutex<Vec<Revision>>,
     trouble: Trouble,
 }
 
 impl Applied {
-    fn ids(&self) -> Vec<String> {
+    fn ids(&self) -> Vec<Revision> {
         self.ids.lock().expect("not poisoned").clone()
     }
 
-    fn saved(&self) -> Vec<String> {
+    fn saved(&self) -> Vec<Revision> {
         self.saved.lock().expect("not poisoned").clone()
     }
 }
@@ -129,17 +130,14 @@ impl Projection for Applied {
 }
 
 impl ResumableProjection for Applied {
-    async fn checkpoint(&self) -> Result<Option<String>, Refused> {
+    async fn checkpoint(&self) -> Result<Option<Revision>, Refused> {
         tokio::task::yield_now().await;
-        Ok(self.saved.lock().expect("not poisoned").last().cloned())
+        Ok(self.saved.lock().expect("not poisoned").last().copied())
     }
 
-    async fn save_checkpoint(&self, event_id: &str) -> Result<(), Refused> {
+    async fn save_checkpoint(&self, event_id: Revision) -> Result<(), Refused> {
         tokio::task::yield_now().await;
-        self.saved
-            .lock()
-            .expect("not poisoned")
-            .push(event_id.to_owned());
+        self.saved.lock().expect("not poisoned").push(event_id);
 
         Ok(())
     }
@@ -148,11 +146,11 @@ impl ResumableProjection for Applied {
 /// A ledger that remembers the ID of every event it committed with.
 #[derive(Debug, Default)]
 struct Ledger {
-    commits: Arc<Mutex<Vec<String>>>,
+    commits: Arc<Mutex<Vec<Revision>>>,
 }
 
 struct Booking {
-    commits: Arc<Mutex<Vec<String>>>,
+    commits: Arc<Mutex<Vec<Revision>>>,
 }
 
 impl TransactionalProjection for Ledger {
@@ -160,9 +158,9 @@ impl TransactionalProjection for Ledger {
     type Error = Refused;
     type Transaction = Booking;
 
-    async fn checkpoint(&self) -> Result<Option<String>, Refused> {
+    async fn checkpoint(&self) -> Result<Option<Revision>, Refused> {
         tokio::task::yield_now().await;
-        Ok(self.commits.lock().expect("not poisoned").last().cloned())
+        Ok(self.commits.lock().expect("not poisoned").last().copied())
     }
 
     async fn begin(&self) -> Result<Booking, Refused> {
@@ -186,12 +184,12 @@ impl Transaction for Booking {
         Ok(())
     }
 
-    async fn commit(self, last_event_id: &str) -> Result<(), Refused> {
+    async fn commit(self, last_event_id: Revision) -> Result<(), Refused> {
         tokio::task::yield_now().await;
         self.commits
             .lock()
             .expect("not poisoned")
-            .push(last_event_id.to_owned());
+            .push(last_event_id);
 
         Ok(())
     }
@@ -229,7 +227,7 @@ fn named(name: &str) -> ProjectionOptions {
     ProjectionOptions::named(name)
 }
 
-async fn increment(store: &Store, subject: &str, count: usize) -> Vec<String> {
+async fn increment(store: &Store, subject: &str, count: usize) -> Vec<Revision> {
     store
         .write(
             (0..count)
@@ -240,7 +238,7 @@ async fn increment(store: &Store, subject: &str, count: usize) -> Vec<String> {
         .await
         .expect("the events are written")
         .iter()
-        .map(|event| event.id().to_owned())
+        .map(revision_of_event)
         .collect()
 }
 
@@ -269,7 +267,7 @@ async fn follows_the_events_once_it_has_caught_up_and_stops_with_its_token() {
     let status = run.status();
     assert_eq!(status.phase, Phase::Live);
     assert!(status.has_caught_up);
-    assert_eq!(status.revision.as_deref(), Some(after[0].as_str()));
+    assert_eq!(status.revision, Some(after[0]));
     assert_eq!(run.name(), Some("books"));
 
     token.cancel();
@@ -288,7 +286,7 @@ async fn resumes_from_its_checkpoint_and_saves_it_after_every_live_event() {
     let subject = subject_for("run-resumable");
     let before = increment(&store, &subject, 2).await;
     let projection = Arc::new(Applied {
-        saved: Mutex::new(vec![before[0].clone()]),
+        saved: Mutex::new(vec![before[0]]),
         ..Applied::default()
     });
     let token = CancellationToken::new();
@@ -333,10 +331,10 @@ async fn commits_a_transactional_projection_in_batches_and_then_every_event() {
     within("catching up", run.caught_up()).await;
     assert_eq!(
         *ledger.commits.lock().expect("not poisoned"),
-        [before[1].clone(), before[2].clone()],
+        [before[1], before[2]],
         "it commits a batch of two, and the rest"
     );
-    assert_eq!(run.status().revision.as_deref(), Some(before[2].as_str()));
+    assert_eq!(run.status().revision, Some(before[2]));
 
     let after = increment(&store, &subject, 2).await;
     eventually("committing the new events", || {

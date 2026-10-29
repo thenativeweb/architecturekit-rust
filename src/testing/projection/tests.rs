@@ -16,7 +16,7 @@ use serde_json::json;
 
 use crate::{
     Categorized, Category, Envelope, Event, Events, InMemoryView, Projection, ProjectionError,
-    Transaction, TransactionalProjection, UpcastEvent, Upcasters, View, ViewError,
+    Revision, Transaction, TransactionalProjection, UpcastEvent, Upcasters, View, ViewError,
     testing::{StoredEvent, project, project_transactional, stored_events, stored_events_at},
 };
 
@@ -125,7 +125,7 @@ impl Projection for Owners {
 /// A projection of typed openings, which records what it has seen.
 struct TypedOwners {
     view: InMemoryView<String, String>,
-    seen: Mutex<Vec<String>>,
+    seen: Mutex<Vec<Revision>>,
 }
 
 impl TypedOwners {
@@ -136,7 +136,7 @@ impl TypedOwners {
         }
     }
 
-    fn seen(&self) -> Vec<String> {
+    fn seen(&self) -> Vec<Revision> {
         self.seen.lock().expect("not poisoned").clone()
     }
 }
@@ -172,20 +172,17 @@ impl Projection for TypedOwners {
         Some(&OWNER_UPCASTERS)
     }
 
-    fn seen(&self, event_id: &str) {
-        self.seen
-            .lock()
-            .expect("not poisoned")
-            .push(event_id.to_owned());
+    fn seen(&self, event_id: Revision) {
+        self.seen.lock().expect("not poisoned").push(event_id);
     }
 }
 
 #[test]
 fn carries_what_a_database_would() {
-    let stored = StoredEvent::new("/account/1", "7", &opened("golo"));
+    let stored = StoredEvent::new("/account/1", 7, &opened("golo"));
 
     assert_eq!(stored.subject, "/account/1");
-    assert_eq!(stored.id, "7");
+    assert_eq!(stored.id, Revision::from(7));
     assert_eq!(stored.event_type, Opened::EVENT_TYPE);
     assert_eq!(stored.data, json!({ "owner": "golo" }));
     assert_eq!(stored.source, "https://architecturekit.test");
@@ -208,11 +205,7 @@ fn carries_what_a_database_would() {
     expected = r#"architecturekit: StoredEvent::new can not encode an event of type "test.account.unencodable": refusing to be encoded"#
 )]
 fn panics_on_an_event_that_can_not_be_encoded() {
-    let _ = StoredEvent::new(
-        "/account/1",
-        "0",
-        &AccountEvent::Unencodable(Unencodable {}),
-    );
+    let _ = StoredEvent::new("/account/1", 0, &AccountEvent::Unencodable(Unencodable {}));
 }
 
 #[test]
@@ -224,7 +217,7 @@ fn turns_into_the_event_of_the_client_sdk_with_every_field() {
         data: json!("not an object"),
         trace_parent: Some("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01".to_owned()),
         trace_state: Some("vendor=value".to_owned()),
-        ..StoredEvent::new("/account/1", "7", &opened("golo"))
+        ..StoredEvent::new("/account/1", 7, &opened("golo"))
     };
 
     let event: eventsourcingdb::Event = stored.into();
@@ -250,8 +243,37 @@ fn turns_into_the_event_of_the_client_sdk_with_every_field() {
 fn numbers_from_zero() {
     let stored = stored_events("/account/1", [opened("golo"), closed(), opened("jane")]);
 
-    let ids: Vec<&str> = stored.iter().map(|event| event.id.as_str()).collect();
-    assert_eq!(ids, ["0", "1", "2"]);
+    let ids: Vec<Revision> = stored.iter().map(|event| event.id).collect();
+    assert_eq!(ids, [0, 1, 2].map(Revision::from));
+}
+
+#[test]
+fn numbers_up_to_the_largest_revision() {
+    let largest = Revision::try_from((1_u64 << 63) - 1).expect("it is the largest revision");
+
+    let stored = stored_events_at(
+        "/account/1",
+        largest,
+        DateTime::UNIX_EPOCH,
+        [opened("golo")],
+    );
+
+    assert_eq!(stored[0].id, largest);
+}
+
+#[test]
+#[should_panic(
+    expected = "architecturekit: stored_events_at numbers the events from 9223372036854775807 on beyond the largest revision"
+)]
+fn panics_for_ids_beyond_the_largest_revision() {
+    let largest = Revision::try_from((1_u64 << 63) - 1).expect("it is the largest revision");
+
+    let _ = stored_events_at(
+        "/account/1",
+        largest,
+        DateTime::UNIX_EPOCH,
+        [opened("golo"), opened("jane")],
+    );
 }
 
 #[test]
@@ -265,16 +287,24 @@ fn numbers_from_the_given_id_and_times_a_minute_apart() {
         [opened("golo"), closed(), opened("jane")],
     );
 
-    let shapes: Vec<(&str, DateTime<Utc>, &str)> = stored
+    let shapes: Vec<(Revision, DateTime<Utc>, &str)> = stored
         .iter()
-        .map(|event| (event.id.as_str(), event.time, event.subject.as_str()))
+        .map(|event| (event.id, event.time, event.subject.as_str()))
         .collect();
     assert_eq!(
         shapes,
         [
-            ("7", noon, "/account/1"),
-            ("8", noon + TimeDelta::minutes(1), "/account/1"),
-            ("9", noon + TimeDelta::minutes(2), "/account/1"),
+            (Revision::from(7), noon, "/account/1"),
+            (
+                Revision::from(8),
+                noon + TimeDelta::minutes(1),
+                "/account/1"
+            ),
+            (
+                Revision::from(9),
+                noon + TimeDelta::minutes(2),
+                "/account/1"
+            ),
         ]
     );
     assert_eq!(
@@ -304,7 +334,7 @@ async fn reports_a_refusal() {
     let owners = Owners { view: owner_view() };
 
     // Data that does not match the event makes the projection refuse.
-    let mut refused = StoredEvent::new("/account/1", "0", &opened("golo"));
+    let mut refused = StoredEvent::new("/account/1", 0, &opened("golo"));
     refused.data = json!({ "owner": 42 });
 
     let failure = project(&owners, &[refused])
@@ -335,7 +365,7 @@ async fn drives_a_typed_projection() {
 #[tokio::test]
 async fn reports_data_a_typed_projection_can_not_read() {
     let owners = TypedOwners::new();
-    let mut broken = StoredEvent::new("/account/1", "0", &opened("golo"));
+    let mut broken = StoredEvent::new("/account/1", 0, &opened("golo"));
     broken.data = json!("not an object");
 
     let failure = project(&owners, &[broken])
@@ -352,11 +382,11 @@ async fn takes_the_way_of_a_run() {
     // part by part, an event of a type the projection does not know is left
     // out, and the projection learns of every event.
     let owners = TypedOwners::new();
-    let mut invented = StoredEvent::new("/account/2", "1", &opened("john"));
+    let mut invented = StoredEvent::new("/account/2", 1, &opened("john"));
     "test.account.invented".clone_into(&mut invented.event_type);
     let twice = StoredEvent {
         event_type: "test.account.opened-twice".to_owned(),
-        ..StoredEvent::new("/account/3", "2", &opened("ignored"))
+        ..StoredEvent::new("/account/3", 2, &opened("ignored"))
     };
 
     project(&owners, &[invented, twice])
@@ -364,7 +394,7 @@ async fn takes_the_way_of_a_run() {
         .expect("the events are applied");
 
     assert_eq!(all_of(&owners.view).await, ["golo", "jane"]);
-    assert_eq!(owners.seen(), ["1", "2"]);
+    assert_eq!(owners.seen(), [Revision::from(1), Revision::from(2)]);
 }
 
 /// What a transaction writes down that happens to it, shared with the
@@ -408,7 +438,7 @@ impl TransactionalProjection for OwnerTable {
     type Error = Refused;
     type Transaction = OwnerTransaction;
 
-    async fn checkpoint(&self) -> Result<Option<String>, Refused> {
+    async fn checkpoint(&self) -> Result<Option<Revision>, Refused> {
         tokio::task::yield_now().await;
         Ok(None)
     }
@@ -441,7 +471,7 @@ impl Transaction for OwnerTransaction {
         Ok(())
     }
 
-    async fn commit(self, last_event_id: &str) -> Result<(), Refused> {
+    async fn commit(self, last_event_id: Revision) -> Result<(), Refused> {
         tokio::task::yield_now().await;
         self.log.write(format!("commit {last_event_id}"));
         self.trouble
@@ -566,7 +596,7 @@ impl TransactionalProjection for TypedOwnerTable {
     type Error = Refused;
     type Transaction = TypedOwnerTransaction;
 
-    async fn checkpoint(&self) -> Result<Option<String>, Refused> {
+    async fn checkpoint(&self) -> Result<Option<Revision>, Refused> {
         tokio::task::yield_now().await;
         Ok(None)
     }
@@ -592,7 +622,7 @@ impl Transaction for TypedOwnerTransaction {
         Ok(())
     }
 
-    async fn commit(self, _: &str) -> Result<(), Refused> {
+    async fn commit(self, _: Revision) -> Result<(), Refused> {
         tokio::task::yield_now().await;
         for owner in self.pending {
             self.committed.write(owner);

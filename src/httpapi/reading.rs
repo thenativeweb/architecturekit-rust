@@ -5,7 +5,7 @@ use http::{HeaderName, HeaderValue, Response, StatusCode, header, request::Parts
 use serde::Serialize;
 
 use super::{HttpError, answer::json};
-use crate::{Revisioned, parse_revision};
+use crate::{Revision, Revisioned};
 
 #[cfg(all(test, feature = "axum"))]
 mod tests;
@@ -113,10 +113,11 @@ impl Reading {
         if wanted.is_empty() {
             return Ok(());
         }
-        let wanted = String::from_utf8_lossy(wanted.as_bytes());
-        let _ = parse_revision(&wanted).map_err(HttpError::malformed)?;
+        let wanted: Revision = String::from_utf8_lossy(wanted.as_bytes())
+            .parse()
+            .map_err(HttpError::malformed)?;
 
-        match tokio::time::timeout(wait, view.wait_for(&wanted)).await {
+        match tokio::time::timeout(wait, view.wait_for(wanted)).await {
             Ok(Err(failure)) => Err(HttpError::of(failure)),
             Ok(Ok(())) | Err(_) => Ok(()),
         }
@@ -155,12 +156,11 @@ impl Reading {
     {
         self.awaiting(view, wait).await?;
 
-        let revision = view.revision().await.map_err(HttpError::of)?;
-        let Some(revision) = revision.filter(|revision| !revision.is_empty()) else {
+        let Some(revision) = view.revision().await.map_err(HttpError::of)? else {
             return answer().await;
         };
 
-        let tag = self.tag_of(&revision, query);
+        let tag = self.tag_of(revision, query);
         if let Some(tag) = &tag
             && self.holds(tag)
         {
@@ -177,7 +177,7 @@ impl Reading {
 
     /// Returns the tag of an answer at the given revision, or `None` if the
     /// query can not be encoded.
-    fn tag_of<Q: Serialize + ?Sized>(&self, revision: &str, query: &Q) -> Option<String> {
+    fn tag_of<Q: Serialize + ?Sized>(&self, revision: Revision, query: &Q) -> Option<String> {
         let query = serde_json::to_vec(query).ok()?;
 
         let mut hash = Fnv64a::default();
@@ -258,11 +258,11 @@ pub struct QueryAnswer<T> {
 enum Kind<T> {
     Found {
         result: T,
-        revision: Option<(String, Option<String>)>,
+        revision: Option<(Revision, Option<String>)>,
     },
     Missing,
     Unchanged {
-        revision: String,
+        revision: Revision,
         tag: String,
     },
 }
@@ -291,7 +291,7 @@ impl<T> QueryAnswer<T> {
 
     /// Adds the revision of the view and the tag of the answer to a result.
     /// An answer that found nothing carries neither, as any failure.
-    fn tagged(self, revision: String, tag: Option<String>) -> Self {
+    fn tagged(self, revision: Revision, tag: Option<String>) -> Self {
         match self.kind {
             Kind::Found { result, .. } => Self {
                 kind: Kind::Found {
@@ -315,7 +315,7 @@ impl<T: Serialize> From<QueryAnswer<T>> for Response<Bytes> {
                 };
                 let mut response = json(StatusCode::OK, &value);
                 if let Some((revision, tag)) = revision {
-                    mark_revision(&mut response, &revision, tag.as_deref());
+                    mark_revision(&mut response, revision, tag.as_deref());
                 }
 
                 response
@@ -324,7 +324,7 @@ impl<T: Serialize> From<QueryAnswer<T>> for Response<Bytes> {
             Kind::Unchanged { revision, tag } => {
                 let mut response = Response::new(Bytes::new());
                 *response.status_mut() = StatusCode::NOT_MODIFIED;
-                mark_revision(&mut response, &revision, Some(&tag));
+                mark_revision(&mut response, revision, Some(&tag));
 
                 response
             }
@@ -341,15 +341,13 @@ impl<T: Serialize> axum::response::IntoResponse for QueryAnswer<T> {
 
 /// Names the revision and the tag of an answer, which may be cached
 /// privately, but has to be checked every time.
-fn mark_revision(response: &mut Response<Bytes>, revision: &str, tag: Option<&str>) {
+fn mark_revision(response: &mut Response<Bytes>, revision: Revision, tag: Option<&str>) {
     let headers = response.headers_mut();
     let _ = headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, no-cache"),
     );
-    if let Ok(revision) = HeaderValue::from_str(revision) {
-        let _ = headers.insert(REVISION, revision);
-    }
+    let _ = headers.insert(REVISION, HeaderValue::from(revision.get()));
     if let Some(tag) = tag.and_then(|tag| HeaderValue::from_str(tag).ok()) {
         let _ = headers.insert(header::ETAG, tag);
     }

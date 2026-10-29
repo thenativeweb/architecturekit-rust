@@ -26,9 +26,10 @@ use super::{
     commands::{Increment, SOURCE, counter_decider, interfering, total_in},
     database::{Database, subject_for},
     fake::{Answer, Api, Fake, Reply},
+    revision_of_event,
 };
 use crate::{
-    Decider, DomainError, EventOn, ExecuteError, Failure, Permanent, Precondition, Store,
+    Decider, DomainError, EventOn, ExecuteError, Failure, Permanent, Precondition, Revision, Store,
     Transient, WriteError,
     command::{resolve_preconditions, violated_precondition},
 };
@@ -216,14 +217,14 @@ async fn reports_an_outdated_revision_of_the_caller_next_to_on_state_read_at_onc
     // only the revision of the caller, which the second event outdated, does
     // not.
     let (decider, decisions) = interfering(&database, 0).await;
-    let (on, outdated) = (subject.clone(), seeded[0].id().to_owned());
+    let (on, outdated) = (subject.clone(), revision_of_event(&seeded[0]));
     let failure = store
         .execute(
             &decider,
             Increment::new(&subject, 1).declaring(move || {
                 vec![
                     Precondition::on_state_read(),
-                    Precondition::on_event_id(on.clone(), outdated.clone()),
+                    Precondition::on_event_id(on.clone(), outdated),
                 ]
             }),
         )
@@ -290,13 +291,13 @@ async fn decides_again_through_either_api_if_on_state_read_did_not_hold_among_pr
     // on_state_read is checked as the same kind as on_event_id, since the
     // subject has an event, and the two are told apart by their index.
     let (decider, decisions) = interfering(&database, 1).await;
-    let on_other = on_other[0].id().to_owned();
+    let on_other = revision_of_event(&on_other[0]);
     let written = store
         .execute(
             &decider,
             Increment::new(&subject, 1).declaring(move || {
                 vec![
-                    Precondition::on_event_id(other.clone(), on_other.clone()),
+                    Precondition::on_event_id(other.clone(), on_other),
                     Precondition::on_state_read(),
                     Precondition::on_populated_subject(other.clone()),
                 ]
@@ -386,7 +387,7 @@ async fn decides_again_only_if_the_database_names_on_state_read_or_no_preconditi
                 Increment::new("/test", 1).declaring(|| {
                     vec![
                         Precondition::on_state_read(),
-                        Precondition::on_event_id("/test", "0"),
+                        Precondition::on_event_id("/test", Revision::from(0)),
                         Precondition::require(
                             eventsourcingdb::Precondition::is_eventql_query_true(
                                 "FROM e IN events PROJECT INTO COUNT() == 0",
@@ -447,8 +448,8 @@ fn json_of(precondition: &eventsourcingdb::Precondition) -> Value {
     serde_json::to_value(precondition).expect("a precondition of the client SDK is JSON")
 }
 
-fn resolved(subject: &str, declared: Vec<Precondition>, last_event_id: Option<&str>) -> Vec<Value> {
-    resolve_preconditions(subject, declared, last_event_id)
+fn resolved(subject: &str, declared: Vec<Precondition>, last_event_id: Option<u32>) -> Vec<Value> {
+    resolve_preconditions(subject, declared, last_event_id.map(Revision::from))
         .iter()
         .map(json_of)
         .collect()
@@ -460,9 +461,9 @@ fn resolved(subject: &str, declared: Vec<Precondition>, last_event_id: Option<&s
 /// both of `on_event_id`.
 fn several_of_a_kind() -> Vec<Precondition> {
     vec![
-        Precondition::on_event_id("/books/23", "3"),
+        Precondition::on_event_id("/books/23", Revision::from(3)),
         Precondition::on_state_read(),
-        Precondition::on_event_id("/books/42", "5"),
+        Precondition::on_event_id("/books/42", Revision::from(5)),
         Precondition::on_pristine_subject("/books/7"),
         Precondition::require(eventsourcingdb::Precondition::is_eventql_query_true(
             "FROM e IN events PROJECT INTO COUNT() == 0",
@@ -473,7 +474,7 @@ fn several_of_a_kind() -> Vec<Precondition> {
 #[test]
 fn fills_in_on_state_read_with_the_last_event_read() {
     assert_eq!(
-        resolved("/books/42", vec![Precondition::on_state_read()], Some("7")),
+        resolved("/books/42", vec![Precondition::on_state_read()], Some(7)),
         [json_of(
             &eventsourcingdb::Precondition::is_subject_on_event_id("/books/42", "7", None)
         )]
@@ -504,7 +505,7 @@ fn passes_required_preconditions_on_as_they_are_in_order() {
             Precondition::on_state_read(),
             Precondition::require(second()),
         ],
-        Some("7"),
+        Some(7),
     );
 
     assert_eq!(resolved.len(), 3);
@@ -518,10 +519,10 @@ fn resolves_on_event_id_into_the_revision_check_of_the_database() {
         resolved(
             "/books/42",
             vec![
-                Precondition::on_event_id("/books/23", "5"),
+                Precondition::on_event_id("/books/23", Revision::from(5)),
                 Precondition::on_state_read(),
             ],
-            Some("7"),
+            Some(7),
         ),
         [
             json_of(&eventsourcingdb::Precondition::is_subject_on_event_id(
@@ -541,11 +542,7 @@ fn resolves_on_event_id_into_the_revision_check_of_the_database() {
 #[test]
 fn checks_nothing_for_unconditionally() {
     assert_eq!(
-        resolved(
-            "/books/42",
-            vec![Precondition::unconditionally()],
-            Some("7")
-        ),
+        resolved("/books/42", vec![Precondition::unconditionally()], Some(7)),
         Vec::<Value>::new()
     );
 }
@@ -568,7 +565,7 @@ fn resolves_every_declared_precondition_at_the_index_it_is_declared_at_adding_no
         .collect();
 
     assert_eq!(
-        resolved("/books/42", several_of_a_kind(), Some("7")),
+        resolved("/books/42", several_of_a_kind(), Some(7)),
         expected
     );
 }
@@ -606,7 +603,6 @@ async fn failure_of_write(client: eventsourcingdb::Client) -> Failure {
         WriteError::Transient(Transient::Conflict(failure) | Transient::Other(failure))
         | WriteError::Permanent(Permanent::Unverified(failure) | Permanent::Other(failure))
         | WriteError::OutcomeUnknown(failure) => failure,
-        WriteError::NotARevision(refusal) => panic!("the write was not sent: {refusal:?}"),
     }
 }
 

@@ -256,9 +256,9 @@ impl axum::response::IntoResponse for HttpError {
 
 /// Answers every failure of the kit, which all turn into this one: a failure
 /// of the decider by its category (see [`HttpError::of`]), a conflict with
-/// 409, a write whose outcome is unknown with 500 and a text of its own, a
-/// value that is not a revision and an empty range with 400 and their own
-/// text, and any other failure by its category.
+/// 409, a write whose outcome is unknown with 500 and a text of its own, an
+/// empty range with 400 and its own text, and any other failure by its
+/// category.
 impl<D: Error + Categorized + Send + Sync + 'static> From<crate::Error<D>> for HttpError {
     fn from(error: crate::Error<D>) -> Self {
         match error {
@@ -275,7 +275,6 @@ impl<D: Error + Categorized + Send + Sync + 'static> From<crate::Error<D>> for H
                 "outcome unknown: the request may have succeeded",
                 Box::new(error),
             ),
-            crate::Error::NotARevision(refusal) => refusal.into(),
             crate::Error::EmptyRange(refusal) => refusal.into(),
         }
     }

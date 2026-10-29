@@ -27,8 +27,8 @@ use super::{
 };
 use crate::{
     Categorized, Category, Failure, Permanent, Projected, Projection, ProjectionError,
-    ProjectionOptions, ProjectionRun, Reconnect, ResumableProjection, Subjects, Transaction,
-    TransactionalProjection, Transient,
+    ProjectionOptions, ProjectionRun, Reconnect, ResumableProjection, Revision, Subjects,
+    Transaction, TransactionalProjection, Transient, revision::id_of,
 };
 
 #[cfg(test)]
@@ -40,21 +40,23 @@ pub(crate) trait Writer: Send {
     /// Returns where to go on from.
     fn checkpoint(
         &mut self,
-    ) -> impl Future<Output = Result<Option<String>, ProjectionError>> + Send;
+    ) -> impl Future<Output = Result<Option<Revision>, ProjectionError>> + Send;
 
     /// Begins a batch.
     fn begin(&mut self) -> impl Future<Output = Result<(), ProjectionError>> + Send;
 
-    /// Applies a stored event, which has been verified.
+    /// Applies a stored event, which has been verified, and whose ID is the
+    /// given one.
     fn apply(
         &mut self,
         event: &eventsourcingdb::Event,
+        id: Revision,
     ) -> impl Future<Output = Result<(), ProjectionError>> + Send;
 
     /// Ends a batch, whose last event has the given ID.
     fn commit(
         &mut self,
-        last_event_id: &str,
+        last_event_id: Revision,
     ) -> impl Future<Output = Result<(), ProjectionError>> + Send;
 
     /// Undoes a batch that has begun.
@@ -82,7 +84,7 @@ async fn project<E: Projected, F: Future<Output = Result<(), ProjectionError>>>(
 /// again after a lost stream does not apply any event twice.
 pub(crate) struct RebuildWriter<R> {
     projection: R,
-    last_applied: Option<String>,
+    last_applied: Option<Revision>,
 }
 
 impl<R> RebuildWriter<R> {
@@ -101,15 +103,19 @@ where
 {
     fn checkpoint(
         &mut self,
-    ) -> impl Future<Output = Result<Option<String>, ProjectionError>> + Send {
-        future::ready(Ok(self.last_applied.clone()))
+    ) -> impl Future<Output = Result<Option<Revision>, ProjectionError>> + Send {
+        future::ready(Ok(self.last_applied))
     }
 
     fn begin(&mut self) -> impl Future<Output = Result<(), ProjectionError>> + Send {
         future::ready(Ok(()))
     }
 
-    async fn apply(&mut self, event: &eventsourcingdb::Event) -> Result<(), ProjectionError> {
+    async fn apply(
+        &mut self,
+        event: &eventsourcingdb::Event,
+        id: Revision,
+    ) -> Result<(), ProjectionError> {
         let projection = &*self.projection;
         project(
             event,
@@ -122,13 +128,13 @@ where
             },
         )
         .await?;
-        projection.seen(event.id());
-        self.last_applied = Some(event.id().to_owned());
+        projection.seen(id);
+        self.last_applied = Some(id);
 
         Ok(())
     }
 
-    fn commit(&mut self, _: &str) -> impl Future<Output = Result<(), ProjectionError>> + Send {
+    fn commit(&mut self, _: Revision) -> impl Future<Output = Result<(), ProjectionError>> + Send {
         future::ready(Ok(()))
     }
 
@@ -148,7 +154,7 @@ where
 /// a checkpoint that a batch cut short did not get to save.
 pub(crate) struct ResumableWriter<R> {
     projection: R,
-    last_applied: Option<String>,
+    last_applied: Option<Revision>,
 }
 
 impl<R> ResumableWriter<R> {
@@ -165,9 +171,9 @@ where
     R: Deref + Send + Sync,
     R::Target: ResumableProjection,
 {
-    async fn checkpoint(&mut self) -> Result<Option<String>, ProjectionError> {
+    async fn checkpoint(&mut self) -> Result<Option<Revision>, ProjectionError> {
         if self.last_applied.is_some() {
-            return Ok(self.last_applied.clone());
+            return Ok(self.last_applied);
         }
 
         self.projection
@@ -180,7 +186,11 @@ where
         future::ready(Ok(()))
     }
 
-    async fn apply(&mut self, event: &eventsourcingdb::Event) -> Result<(), ProjectionError> {
+    async fn apply(
+        &mut self,
+        event: &eventsourcingdb::Event,
+        id: Revision,
+    ) -> Result<(), ProjectionError> {
         let projection = &*self.projection;
         project(
             event,
@@ -193,13 +203,13 @@ where
             },
         )
         .await?;
-        projection.seen(event.id());
-        self.last_applied = Some(event.id().to_owned());
+        projection.seen(id);
+        self.last_applied = Some(id);
 
         Ok(())
     }
 
-    async fn commit(&mut self, last_event_id: &str) -> Result<(), ProjectionError> {
+    async fn commit(&mut self, last_event_id: Revision) -> Result<(), ProjectionError> {
         self.projection
             .save_checkpoint(last_event_id)
             .await
@@ -250,7 +260,7 @@ where
     R: Deref + Send + Sync,
     R::Target: TransactionalProjection,
 {
-    async fn checkpoint(&mut self) -> Result<Option<String>, ProjectionError> {
+    async fn checkpoint(&mut self) -> Result<Option<Revision>, ProjectionError> {
         self.projection
             .checkpoint()
             .await
@@ -265,7 +275,11 @@ where
 
     // A panic is turned into an error right where it happens, so that driving
     // rolls the transaction back, as for an error, instead of leaving it open.
-    async fn apply(&mut self, event: &eventsourcingdb::Event) -> Result<(), ProjectionError> {
+    async fn apply(
+        &mut self,
+        event: &eventsourcingdb::Event,
+        _: Revision,
+    ) -> Result<(), ProjectionError> {
         let transaction = self
             .transaction
             .as_mut()
@@ -285,7 +299,7 @@ where
         Ok(())
     }
 
-    async fn commit(&mut self, last_event_id: &str) -> Result<(), ProjectionError> {
+    async fn commit(&mut self, last_event_id: Revision) -> Result<(), ProjectionError> {
         let transaction = self
             .transaction
             .take()
@@ -338,9 +352,9 @@ async fn roll_back<W: Writer>(writer: &mut W, cause: ProjectionError) -> Project
 
 /// Applies the events in batches of the given size, and returns the ID of the
 /// last one it applied, together with how it ended. Every event is verified
-/// before it is applied, and one that fails ends the batch like an event the
-/// projection refuses. Every committed batch is reported with the ID of its
-/// last event.
+/// before it is applied, and one that fails, or whose ID is not a revision,
+/// ends the batch like an event the projection refuses. Every committed batch
+/// is reported with the ID of its last event.
 ///
 /// Once the token is cancelled, it stops waiting for the next event, rolls an
 /// open batch back, and returns without a failure, so the caller tells a
@@ -352,8 +366,8 @@ pub(crate) async fn drive<W: Writer>(
     verify: impl Fn(&eventsourcingdb::Event) -> Result<(), Permanent>,
     batch_size: usize,
     token: &CancellationToken,
-    mut committed: impl FnMut(&str),
-) -> (Option<String>, Result<(), ProjectionError>) {
+    mut committed: impl FnMut(Revision),
+) -> (Option<Revision>, Result<(), ProjectionError>) {
     let mut events = std::pin::pin!(events);
     let mut last_event_id = None;
     let mut in_batch = 0;
@@ -375,11 +389,13 @@ pub(crate) async fn drive<W: Writer>(
             break;
         };
 
-        let checked = event
-            .map_err(read_failed)
-            .and_then(|event| verify(&event).map(|()| event).map_err(Into::into));
-        let event = match checked {
-            Ok(event) => event,
+        let checked = event.map_err(read_failed).and_then(|event| {
+            verify(&event)?;
+            let id = id_of(&event)?;
+            Ok((event, id))
+        });
+        let (event, id) = match checked {
+            Ok(checked) => checked,
             Err(failure) if is_open => {
                 return (last_event_id, Err(roll_back(writer, failure).await));
             }
@@ -393,16 +409,15 @@ pub(crate) async fn drive<W: Writer>(
             is_open = true;
         }
 
-        if let Err(failure) = writer.apply(&event).await {
+        if let Err(failure) = writer.apply(&event, id).await {
             return (last_event_id, Err(roll_back(writer, failure).await));
         }
-        last_event_id = Some(event.id().to_owned());
+        last_event_id = Some(id);
         in_batch += 1;
         if in_batch < batch_size {
             continue;
         }
 
-        let id = event.id();
         if let Err(failure) = writer.commit(id).await {
             return (last_event_id, Err(failure));
         }
@@ -411,7 +426,7 @@ pub(crate) async fn drive<W: Writer>(
         in_batch = 0;
     }
 
-    if is_open && let Some(id) = &last_event_id {
+    if is_open && let Some(id) = last_event_id {
         if let Err(failure) = writer.commit(id).await {
             return (last_event_id, Err(failure));
         }
@@ -421,8 +436,8 @@ pub(crate) async fn drive<W: Writer>(
     (last_event_id, Ok(()))
 }
 
-/// Turns a checkpoint into a lower bound that leaves out the event it names,
-/// since that one has been applied already.
+/// Turns a checkpoint, written as text, into a lower bound that leaves out the
+/// event it names, since that one has been applied already.
 pub(crate) fn bound_after(checkpoint: Option<&str>) -> Option<Bound<'_>> {
     checkpoint.map(|id| Bound {
         bound_type: BoundType::Exclusive,
@@ -481,15 +496,16 @@ impl Reader {
         writer: &mut W,
         batch_size: usize,
         token: &CancellationToken,
-        committed: impl FnMut(&str),
-    ) -> (Option<String>, Result<(), ProjectionError>) {
+        committed: impl FnMut(Revision),
+    ) -> (Option<Revision>, Result<(), ProjectionError>) {
         let checkpoint = match writer.checkpoint().await {
             Ok(checkpoint) => checkpoint,
             Err(failure) => return (None, Err(failure)),
         };
 
+        let after = checkpoint.map(|checkpoint| checkpoint.to_string());
         let options = ReadEventsOptions {
-            lower_bound: bound_after(checkpoint.as_deref()),
+            lower_bound: bound_after(after.as_deref()),
             recursive: subjects.is_tree(),
             ..ReadEventsOptions::default()
         };
@@ -501,9 +517,9 @@ impl Reader {
             requested = self.client.read_events(subjects.subject(), Some(options)) => Some(requested),
         };
         let events = match requested {
-            None => return (checkpoint.clone(), Ok(())),
+            None => return (checkpoint, Ok(())),
             Some(Ok(events)) => events,
-            Some(Err(error)) => return (checkpoint.clone(), Err(read_failed(error))),
+            Some(Err(error)) => return (checkpoint, Err(read_failed(error))),
         };
 
         let (last_event_id, result) = drive(
@@ -516,7 +532,7 @@ impl Reader {
         )
         .await;
 
-        (last_event_id.or_else(|| checkpoint.clone()), result)
+        (last_event_id.or(checkpoint), result)
     }
 
     /// Catches up from the checkpoint, and then follows the events as they are
@@ -550,8 +566,9 @@ impl Reader {
         let caught_up_at = Instant::now();
         run.caught_up_now();
 
+        let after = last_event_id.map(|last_event_id| last_event_id.to_string());
         let options = ObserveEventsOptions {
-            lower_bound: bound_after(last_event_id.as_deref()),
+            lower_bound: bound_after(after.as_deref()),
             recursive: subjects.is_tree(),
             ..ObserveEventsOptions::default()
         };

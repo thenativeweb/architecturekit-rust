@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use futures_util::future;
 use tokio::sync::watch;
 
-use crate::{Categorized, Category, ProjectionError};
+use crate::{Categorized, Category, ProjectionError, Revision};
 
 /// How a projection is started. Build it with [`named`](ProjectionOptions::named)
 /// or [`default`](Default::default), which leaves the projection without a
@@ -92,7 +92,7 @@ pub struct ProjectionStatus {
     /// up.
     pub attempts: usize,
     /// The ID of the last event the projection committed, if any.
-    pub revision: Option<String>,
+    pub revision: Option<Revision>,
     /// Whether the run has caught up at least once. It stays true once set.
     pub has_caught_up: bool,
 }
@@ -209,9 +209,9 @@ impl ProjectionRun {
     }
 
     /// Records the ID of the last event the projection committed.
-    pub(crate) fn committed(&self, event_id: &str) {
+    pub(crate) fn committed(&self, event_id: Revision) {
         self.inner.status.send_modify(|status| {
-            status.revision = Some(event_id.to_owned());
+            status.revision = Some(event_id);
         });
     }
 

@@ -1,9 +1,9 @@
-// These tests check comparing and parsing revisions, revision_of, and
-// wait_for_written. The tests of the revision of a view in memory come with
-// the view. Waiting ends when its future is dropped.
+// These tests check Revision, revision_of, and wait_for_written. The tests of
+// the revision of a view in memory come with the view. Waiting ends when its
+// future is dropped.
 
 use std::{
-    cmp::Ordering,
+    collections::HashSet,
     error::Error,
     fmt,
     future::{self, Future},
@@ -14,12 +14,11 @@ use std::{
 use serde_json::json;
 
 use crate::{
-    Categorized, Category, InMemoryView, NotCaughtUp, Revisioned, compare_revisions,
-    parse_revision, projection::tests::stored, revision_of, wait_for_written,
+    Categorized, Category, InMemoryView, NotARevision, NotCaughtUp, Revision, Revisioned,
+    projection::tests::stored, revision_of, wait_for_written,
 };
 
-/// Values that are not revisions, other than the empty one, which
-/// `compare_revisions` takes for a view that has seen nothing.
+/// Values that are not revisions, other than the empty one.
 pub(crate) const NOT_REVISIONS: [(&str, &str); 10] = [
     ("letters", "abc"),
     ("a fraction", "1.5"),
@@ -33,61 +32,31 @@ pub(crate) const NOT_REVISIONS: [(&str, &str); 10] = [
     ("a number beyond 64 bits", "99999999999999999999"),
 ];
 
-#[test]
-fn revisions_are_compared_as_numbers() {
-    for (name, left, right, expected) in [
-        ("empty vs empty", "", "", Ordering::Equal),
-        ("0 vs 0", "0", "0", Ordering::Equal),
-        ("7 vs 7", "7", "7", Ordering::Equal),
-        ("empty vs 0", "", "0", Ordering::Less),
-        ("0 vs empty", "0", "", Ordering::Greater),
-        ("1 vs 2", "1", "2", Ordering::Less),
-        ("2 vs 1", "2", "1", Ordering::Greater),
-        // The trap this exists for: as text, "10" sorts before "9".
-        ("9 vs 10", "9", "10", Ordering::Less),
-        ("10 vs 9", "10", "9", Ordering::Greater),
-        ("100 vs 99", "100", "99", Ordering::Greater),
-        (
-            "the largest vs the one below",
-            "9223372036854775807",
-            "9223372036854775806",
-            Ordering::Greater,
-        ),
-        ("leading zeros", "002", "2", Ordering::Equal),
-    ] {
-        assert_eq!(compare_revisions(left, right), Ok(expected), "{name}");
-    }
-}
+/// The largest event ID the database hands out.
+const LARGEST: u64 = (1 << 63) - 1;
 
 #[test]
-fn something_that_is_not_a_revision_is_refused() {
-    for (name, revision) in NOT_REVISIONS {
-        assert!(compare_revisions(revision, "1").is_err(), "{name}");
-
-        // Both sides are checked, not only the first.
-        assert!(
-            compare_revisions("1", revision).is_err(),
-            "{name}, on the right"
-        );
-    }
-}
-
-#[test]
-fn returns_the_number_of_a_revision() {
+fn reads_a_revision_from_its_decimal() {
     for (name, revision, expected) in [
         ("the first event ID", "0", 0),
         ("a single digit", "7", 7),
         ("several digits", "10", 10),
         ("leading zeros", "002", 2),
-        ("the largest event ID", "9223372036854775807", (1 << 63) - 1),
+        ("the largest event ID", "9223372036854775807", LARGEST),
     ] {
-        assert_eq!(parse_revision(revision), Ok(expected), "{name}");
+        assert_eq!(
+            revision.parse::<Revision>().map(Revision::get),
+            Ok(expected),
+            "{name}"
+        );
     }
 }
 
 #[test]
 fn refuses_the_empty_string_which_is_no_event_id() {
-    let refusal = parse_revision("").expect_err("the empty string is no event ID");
+    let refusal = ""
+        .parse::<Revision>()
+        .expect_err("the empty string is no event ID");
 
     assert_eq!(refusal.to_string(), r#"not a revision: """#);
     assert_eq!(refusal.revision(), "");
@@ -96,7 +65,7 @@ fn refuses_the_empty_string_which_is_no_event_id() {
 #[test]
 fn refuses_what_is_not_a_revision_naming_the_value() {
     for (name, revision) in NOT_REVISIONS {
-        let refusal = parse_revision(revision).expect_err(name);
+        let refusal = revision.parse::<Revision>().expect_err(name);
 
         assert_eq!(
             refusal.to_string(),
@@ -108,42 +77,174 @@ fn refuses_what_is_not_a_revision_naming_the_value() {
 }
 
 #[test]
-fn reads_a_revision_by_the_rules_compare_revisions_applies() {
-    let values: Vec<&str> = [
-        "0",
-        "1",
-        "2",
-        "002",
-        "9",
-        "10",
-        "99",
-        "100",
-        "9223372036854775806",
-        "9223372036854775807",
-    ]
-    .into_iter()
-    .chain(NOT_REVISIONS.map(|(_, revision)| revision))
-    .collect();
+fn a_value_that_is_not_a_revision_belongs_to_no_category() {
+    let refusal = "abc"
+        .parse::<Revision>()
+        .expect_err("letters are no event ID");
 
-    for left in &values {
-        for right in &values {
-            let order = compare_revisions(left, right);
+    assert_eq!(refusal.category(), None);
+}
 
-            match (parse_revision(left), parse_revision(right)) {
-                (Ok(left_number), Ok(right_number)) => {
-                    assert_eq!(
-                        order,
-                        Ok(left_number.cmp(&right_number)),
-                        "comparing {left:?} with {right:?}"
-                    );
-                }
-                _ => assert!(
-                    order.is_err(),
-                    "compare_revisions accepts {left:?} and {right:?}, which parse_revision refuses",
-                ),
-            }
-        }
+#[test]
+fn takes_every_u32_as_a_revision() {
+    for number in [0, 1, 42, u32::MAX] {
+        assert_eq!(Revision::from(number).get(), u64::from(number));
     }
+}
+
+#[test]
+fn takes_a_u64_up_to_the_largest_event_id() {
+    for number in [0, 1, u64::from(u32::MAX) + 1, LARGEST - 1, LARGEST] {
+        assert_eq!(
+            Revision::try_from(number).map(Revision::get),
+            Ok(number),
+            "{number}"
+        );
+    }
+}
+
+#[test]
+fn refuses_a_u64_beyond_the_largest_event_id_naming_the_value() {
+    for number in [LARGEST + 1, u64::MAX] {
+        let refusal = Revision::try_from(number).expect_err("the database never hands it out");
+
+        assert_eq!(refusal.revision(), number.to_string());
+        assert_eq!(refusal.to_string(), format!("not a revision: \"{number}\""));
+    }
+}
+
+#[test]
+fn writes_a_revision_as_its_decimal_without_leading_zeros() {
+    for (revision, expected) in [
+        ("0", "0"),
+        ("7", "7"),
+        ("002", "2"),
+        ("9223372036854775807", "9223372036854775807"),
+    ] {
+        let revision: Revision = revision.parse().expect("it is a revision");
+
+        assert_eq!(revision.to_string(), expected);
+    }
+}
+
+#[test]
+fn writes_a_revision_with_the_width_and_alignment_of_a_number() {
+    assert_eq!(format!("{:>4}", Revision::from(42)), "  42");
+    assert_eq!(format!("{:<4}|", Revision::from(42)), "42  |");
+}
+
+#[test]
+fn revisions_sort_as_numbers_not_as_text() {
+    let revision = |text: &str| text.parse::<Revision>().expect("it is a revision");
+
+    // The trap this exists for: as text, "10" sorts before "9".
+    assert!(revision("9") < revision("10"));
+    assert!(revision("100") > revision("99"));
+    assert!(revision("9223372036854775806") < revision("9223372036854775807"));
+    assert_eq!(revision("002"), revision("2"));
+
+    let mut revisions: Vec<Revision> = ["10", "9", "100", "0", "99"]
+        .into_iter()
+        .map(revision)
+        .collect();
+    revisions.sort();
+
+    assert_eq!(
+        revisions,
+        [0, 9, 10, 99, 100].map(Revision::from),
+        "revisions sort by their numbers"
+    );
+}
+
+#[test]
+fn revisions_of_the_same_number_are_the_same_whatever_their_text() {
+    let revisions: HashSet<Revision> = ["2", "02", "002"]
+        .into_iter()
+        .map(|text| text.parse().expect("it is a revision"))
+        .collect();
+
+    assert_eq!(revisions.len(), 1);
+}
+
+#[test]
+fn a_revision_reads_back_what_it_writes() {
+    for number in [0, 1, 9, 10, 4_294_967_296, LARGEST] {
+        let revision = Revision::try_from(number).expect("it is a revision");
+
+        assert_eq!(revision.to_string().parse(), Ok(revision), "{number}");
+    }
+}
+
+#[test]
+fn serde_writes_a_revision_as_a_string_of_its_decimal() {
+    assert_eq!(
+        serde_json::to_value(Revision::from(42)).expect("a revision is JSON"),
+        json!("42")
+    );
+    assert_eq!(
+        serde_json::to_string(&Some(Revision::from(7))).expect("a revision is JSON"),
+        r#""7""#
+    );
+}
+
+#[test]
+fn serde_reads_a_revision_from_a_string_by_the_rules_of_parse() {
+    for (text, expected) in [
+        ("0", 0),
+        ("42", 42),
+        ("007", 7),
+        ("9223372036854775807", LARGEST),
+    ] {
+        let revision: Revision =
+            serde_json::from_value(json!(text)).expect("the string is a revision");
+
+        assert_eq!(revision.get(), expected, "{text}");
+    }
+}
+
+#[test]
+fn serde_reads_back_what_it_writes() {
+    for number in [0, 41, LARGEST] {
+        let revision = Revision::try_from(number).expect("it is a revision");
+        let written = serde_json::to_string(&revision).expect("a revision is JSON");
+
+        assert_eq!(
+            serde_json::from_str::<Revision>(&written).expect("it reads back"),
+            revision
+        );
+    }
+}
+
+#[test]
+fn serde_refuses_a_string_that_is_not_a_revision_with_its_text() {
+    for (name, revision) in [("an empty one", "")].into_iter().chain(NOT_REVISIONS) {
+        let failure = serde_json::from_value::<Revision>(json!(revision)).expect_err(name);
+
+        assert_eq!(
+            failure.to_string(),
+            format!("not a revision: {revision:?}"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn serde_refuses_a_number_since_the_database_writes_event_ids_as_strings() {
+    let failure =
+        serde_json::from_value::<Revision>(json!(42)).expect_err("a revision is a string");
+
+    assert_eq!(
+        failure.to_string(),
+        "invalid type: integer `42`, expected a revision, which is a string of a decimal from 0 to 2^63-1"
+    );
+}
+
+#[test]
+fn a_refusal_names_the_value_it_refuses() {
+    let refusal: NotARevision = "soon".parse::<Revision>().expect_err("soon is no event ID");
+
+    assert_eq!(refusal.revision(), "soon");
+    assert!(refusal.source().is_none(), "it wraps nothing else");
 }
 
 /// Stored events with the given IDs.
@@ -157,20 +258,24 @@ fn written(ids: &[&str]) -> Vec<eventsourcingdb::Event> {
 fn the_revision_of_a_write_is_its_highest_event_id() {
     for (name, ids, want) in [
         ("nothing written", &[][..], None),
-        ("one event", &["7"][..], Some("7")),
-        ("two events", &["7", "8"][..], Some("8")),
+        ("one event", &["7"][..], Some(7)),
+        ("two events", &["7", "8"][..], Some(8)),
         // Order is not assumed, and numbers decide, not text.
-        ("out of order", &["10", "9"][..], Some("10")),
-        ("nonsense is skipped", &["x", "3"][..], Some("3")),
+        ("out of order", &["10", "9"][..], Some(10)),
+        ("nonsense is skipped", &["x", "3"][..], Some(3)),
     ] {
-        assert_eq!(revision_of(&written(ids)).as_deref(), want, "{name}");
+        assert_eq!(
+            revision_of(&written(ids)),
+            want.map(Revision::from),
+            "{name}"
+        );
     }
 }
 
 /// Returns a view that has seen the event with the given ID.
-fn view_at(revision: &str) -> Arc<InMemoryView<String, String>> {
+fn view_at(revision: u32) -> Arc<InMemoryView<String, String>> {
     let view = Arc::new(InMemoryView::new(String::clone));
-    view.seen(revision);
+    view.seen(Revision::from(revision));
 
     view
 }
@@ -200,7 +305,7 @@ impl Categorized for BrokenView {
 /// returns, and records the revisions it was asked for.
 struct WaitingView<F> {
     wait_for: F,
-    asked: Mutex<Vec<String>>,
+    asked: Mutex<Vec<Revision>>,
 }
 
 impl<F> WaitingView<F>
@@ -214,7 +319,7 @@ where
         }
     }
 
-    fn asked(&self) -> Vec<String> {
+    fn asked(&self) -> Vec<Revision> {
         self.asked
             .lock()
             .expect("no test panics while asking")
@@ -228,15 +333,15 @@ where
 {
     type Error = BrokenView;
 
-    fn revision(&self) -> impl Future<Output = Result<Option<String>, BrokenView>> + Send {
+    fn revision(&self) -> impl Future<Output = Result<Option<Revision>, BrokenView>> + Send {
         future::ready(Ok(None))
     }
 
-    fn wait_for(&self, revision: &str) -> impl Future<Output = Result<(), BrokenView>> + Send {
+    fn wait_for(&self, revision: Revision) -> impl Future<Output = Result<(), BrokenView>> + Send {
         self.asked
             .lock()
             .expect("no test panics while asking")
-            .push(revision.to_owned());
+            .push(revision);
 
         future::ready((self.wait_for)())
     }
@@ -244,7 +349,7 @@ where
 
 #[tokio::test]
 async fn returns_at_once_if_the_view_has_seen_the_events_already() {
-    for revision in ["5", "6"] {
+    for revision in [5, 6] {
         assert!(
             matches!(
                 wait_for_written(
@@ -262,7 +367,7 @@ async fn returns_at_once_if_the_view_has_seen_the_events_already() {
 
 #[tokio::test]
 async fn returns_although_the_time_has_run_out_if_the_view_has_seen_the_events_already() {
-    let waited = wait_for_written(&*view_at("5"), &written(&["5"]), Duration::from_nanos(1)).await;
+    let waited = wait_for_written(&*view_at(5), &written(&["5"]), Duration::from_nanos(1)).await;
 
     assert!(matches!(waited, Ok(())), "{waited:?}");
 }
@@ -279,18 +384,18 @@ async fn waits_for_the_highest_id_among_the_events() {
     .await;
 
     assert!(matches!(waited, Ok(())), "{waited:?}");
-    assert_eq!(view.asked(), ["10"]);
+    assert_eq!(view.asked(), [Revision::from(10)]);
 }
 
 #[tokio::test]
 async fn returns_once_the_view_has_caught_up() {
-    let view = view_at("4");
+    let view = view_at(4);
 
     let catching_up = {
         let view = Arc::clone(&view);
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(20)).await;
-            view.seen("5");
+            view.seen(Revision::from(5));
         })
     };
 
@@ -314,7 +419,7 @@ async fn returns_without_waiting_if_no_events_were_written() {
     assert!(matches!(waited, Ok(())), "{waited:?}");
     assert_eq!(
         view.asked(),
-        Vec::<String>::new(),
+        Vec::<Revision>::new(),
         "the view must not be asked"
     );
 }
@@ -323,8 +428,7 @@ async fn returns_without_waiting_if_no_events_were_written() {
 async fn fails_with_not_caught_up_if_the_view_does_not_catch_up_in_time() {
     let started = Instant::now();
 
-    let waited =
-        wait_for_written(&*view_at("4"), &written(&["5"]), Duration::from_millis(50)).await;
+    let waited = wait_for_written(&*view_at(4), &written(&["5"]), Duration::from_millis(50)).await;
 
     let Err(failure @ NotCaughtUp::TimedOut(timeout)) = waited else {
         panic!("the view has not caught up: {waited:?}");
@@ -344,8 +448,7 @@ async fn fails_with_not_caught_up_if_the_view_does_not_catch_up_in_time() {
 #[tokio::test]
 async fn belongs_to_no_category_if_the_view_does_not_catch_up_in_time_since_the_write_has_succeeded()
  {
-    let waited =
-        wait_for_written(&*view_at("4"), &written(&["5"]), Duration::from_millis(20)).await;
+    let waited = wait_for_written(&*view_at(4), &written(&["5"]), Duration::from_millis(20)).await;
 
     let failure = waited.expect_err("the view has not caught up");
     assert_eq!(
@@ -357,12 +460,8 @@ async fn belongs_to_no_category_if_the_view_does_not_catch_up_in_time_since_the_
 
 #[tokio::test]
 async fn names_the_timeout_the_way_a_duration_prints() {
-    let waited = wait_for_written(
-        &*view_at("4"),
-        &written(&["5"]),
-        Duration::from_micros(1500),
-    )
-    .await;
+    let waited =
+        wait_for_written(&*view_at(4), &written(&["5"]), Duration::from_micros(1500)).await;
 
     assert_eq!(
         waited.expect_err("the view has not caught up").to_string(),
@@ -449,5 +548,5 @@ async fn fails_with_not_caught_up_that_wraps_an_error_of_the_view_that_looks_lik
     expected = "architecturekit: wait_for_written needs a timeout that is positive, not 0ns"
 )]
 async fn panics_for_a_timeout_that_is_not_positive_before_it_looks_at_the_events() {
-    let _ = wait_for_written(&*view_at("5"), &[], Duration::ZERO).await;
+    let _ = wait_for_written(&*view_at(5), &[], Duration::ZERO).await;
 }

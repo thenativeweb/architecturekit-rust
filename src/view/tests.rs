@@ -26,7 +26,7 @@ use serde_json::json;
 
 use crate::{
     Categorized, Category, Envelope, Event, Events, InMemoryIndex, InMemoryView, KeyedView,
-    Outcome, Projected, Revisioned, UpcastEvent, Upcasters, View, ViewError,
+    Outcome, Projected, Revision, Revisioned, UpcastEvent, Upcasters, View, ViewError,
     projection::tests::stored,
 };
 
@@ -36,7 +36,7 @@ struct Book {
     id: String,
     shelf: String,
     title: String,
-    revision: String,
+    revision: Option<Revision>,
 }
 
 impl Book {
@@ -63,14 +63,14 @@ fn book_view() -> InMemoryView<String, Book> {
 }
 
 /// An event with the given ID, as a projection gets it, without data.
-fn event(id: &str) -> Envelope<()> {
-    part_of(id, 0)
+fn event(id: u32) -> Envelope<()> {
+    part_of(Revision::from(id), 0)
 }
 
 /// A part of an event with the given ID that an upcaster split.
-fn part_of(id: &str, part: usize) -> Envelope<()> {
+fn part_of(id: impl Into<Revision>, part: usize) -> Envelope<()> {
     Envelope {
-        id: id.to_owned(),
+        id: id.into(),
         time: DateTime::UNIX_EPOCH,
         source: "https://thenativeweb.io".to_owned(),
         subject: "/books/42".to_owned(),
@@ -82,7 +82,7 @@ fn part_of(id: &str, part: usize) -> Envelope<()> {
     }
 }
 
-fn must_insert<T>(view: &InMemoryView<String, T>, event_id: &str, item: T)
+fn must_insert<T>(view: &InMemoryView<String, T>, event_id: u32, item: T)
 where
     T: Clone + Send + Sync + 'static,
 {
@@ -144,7 +144,7 @@ fn ids_of(books: &[Book]) -> Vec<String> {
 }
 
 /// Returns the revision of a view in memory, which is ready at once.
-fn current_revision<K, T>(view: &InMemoryView<K, T>) -> Option<String>
+fn current_revision<K, T>(view: &InMemoryView<K, T>) -> Option<Revision>
 where
     K: Clone + std::fmt::Debug + Eq + Hash + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
@@ -166,13 +166,13 @@ fn inserts_and_gets_items() {
     let view = book_view();
 
     assert_eq!(
-        view.insert(&event("1"), Book::new("42").titled("2001")),
+        view.insert(&event(1), Book::new("42").titled("2001")),
         Ok(Outcome::Added)
     );
 
     let got = must_get(&view, "42");
     assert_eq!(got.title, "2001");
-    assert_eq!(got.revision, "1");
+    assert_eq!(got.revision, Some(Revision::from(1)));
 
     assert_eq!(item_of(&view, "23"), None);
 }
@@ -180,12 +180,12 @@ fn inserts_and_gets_items() {
 #[test]
 fn hands_out_items_in_the_order_of_insertion() {
     let view = book_view();
-    must_insert(&view, "1", Book::new("a"));
-    must_insert(&view, "2", Book::new("b"));
-    must_insert(&view, "3", Book::new("c"));
+    must_insert(&view, 1, Book::new("a"));
+    must_insert(&view, 2, Book::new("b"));
+    must_insert(&view, 3, Book::new("c"));
 
-    assert_eq!(view.delete("b", &event("4")), Ok(Outcome::Applied));
-    must_insert(&view, "5", Book::new("b"));
+    assert_eq!(view.delete("b", &event(4)), Outcome::Applied);
+    must_insert(&view, 5, Book::new("b"));
 
     // A key that was deleted and inserted again moves to the end.
     assert_eq!(ids_in(&view), ["a", "c", "b"]);
@@ -194,10 +194,10 @@ fn hands_out_items_in_the_order_of_insertion() {
 #[test]
 fn hands_out_a_copy() {
     let view = book_view();
-    must_insert(&view, "1", Book::new("a"));
+    must_insert(&view, 1, Book::new("a"));
 
     let items = all_of(&view);
-    must_insert(&view, "2", Book::new("b"));
+    must_insert(&view, 2, Book::new("b"));
 
     // Writing while a query holds its result must not change what it holds.
     assert_eq!(
@@ -210,32 +210,32 @@ fn hands_out_a_copy() {
 #[test]
 fn skips_an_insert_that_is_not_newer() {
     let view = book_view();
-    must_insert(&view, "5", Book::new("42").titled("first"));
+    must_insert(&view, 5, Book::new("42").titled("first"));
 
     // The same event, applied a second time, and an older one.
     assert_eq!(
-        view.insert(&event("5"), Book::new("42").titled("again")),
+        view.insert(&event(5), Book::new("42").titled("again")),
         Ok(Outcome::AlreadyApplied),
         "the same event has to be skipped"
     );
     assert_eq!(
-        view.insert(&event("3"), Book::new("42").titled("older")),
+        view.insert(&event(3), Book::new("42").titled("older")),
         Ok(Outcome::AlreadyApplied),
         "an older event has to be skipped"
     );
 
     let got = must_get(&view, "42");
     assert_eq!(got.title, "first");
-    assert_eq!(got.revision, "5");
+    assert_eq!(got.revision, Some(Revision::from(5)));
 }
 
 #[test]
 fn refuses_a_second_item_with_the_same_key() {
     let view = book_view();
-    must_insert(&view, "1", Book::new("42"));
+    must_insert(&view, 1, Book::new("42"));
 
     let failure = view
-        .insert(&event("2"), Book::new("42"))
+        .insert(&event(2), Book::new("42"))
         .expect_err("a taken key is refused");
 
     assert!(
@@ -252,26 +252,26 @@ fn refuses_a_second_item_with_the_same_key() {
 #[test]
 fn updates_an_item() {
     let view = book_view();
-    must_insert(&view, "1", Book::new("42").titled("draft"));
+    must_insert(&view, 1, Book::new("42").titled("draft"));
 
-    let outcome = view.update("42", &event("2"), |book| {
+    let outcome = view.update("42", &event(2), |book| {
         "final".clone_into(&mut book.title);
-        "made up by the handler".clone_into(&mut book.revision);
+        book.revision = Some(Revision::from(99));
     });
     assert_eq!(outcome, Ok(Outcome::Applied));
 
     // The view sets the revision, whatever the handler wrote.
     let got = must_get(&view, "42");
     assert_eq!(got.title, "final");
-    assert_eq!(got.revision, "2");
+    assert_eq!(got.revision, Some(Revision::from(2)));
 }
 
 #[test]
 fn skips_an_update_that_is_not_newer() {
     let view = book_view();
-    must_insert(&view, "2", Book::new("42").titled("current"));
+    must_insert(&view, 2, Book::new("42").titled("current"));
 
-    let outcome = view.update("42", &event("2"), |book| {
+    let outcome = view.update("42", &event(2), |book| {
         "replayed".clone_into(&mut book.title);
     });
     assert_eq!(outcome, Ok(Outcome::AlreadyApplied));
@@ -284,13 +284,13 @@ fn changes_nothing_for_a_missing_item() {
     let view = book_view();
 
     assert_eq!(
-        view.update("42", &event("1"), |book| "x".clone_into(&mut book.title)),
+        view.update("42", &event(1), |book| "x".clone_into(&mut book.title)),
         Ok(Outcome::Missing),
         "updating a missing book"
     );
     assert_eq!(
-        view.delete("42", &event("1")),
-        Ok(Outcome::Missing),
+        view.delete("42", &event(1)),
+        Outcome::Missing,
         "deleting a missing book"
     );
 }
@@ -298,10 +298,10 @@ fn changes_nothing_for_a_missing_item() {
 #[test]
 fn refuses_to_change_the_key() {
     let view = book_view();
-    must_insert(&view, "1", Book::new("42").titled("kept"));
+    must_insert(&view, 1, Book::new("42").titled("kept"));
 
     let failure = view
-        .update("42", &event("2"), |book| {
+        .update("42", &event(2), |book| {
             "23".clone_into(&mut book.id);
             "moved".clone_into(&mut book.title);
         })
@@ -339,17 +339,21 @@ fn upserts() {
     };
 
     assert_eq!(
-        view.upsert("42", &event("1"), shelve("new")),
+        view.upsert("42", &event(1), shelve("new")),
         Ok(Outcome::Added),
         "a missing book is added"
     );
     let got = must_get(&view, "42");
     assert_eq!(got.title, "new", "a missing book is added");
     assert_eq!(got.shelf, "|new", "a missing book starts from the default");
-    assert_eq!(got.revision, "1", "a missing book is added with the event");
+    assert_eq!(
+        got.revision,
+        Some(Revision::from(1)),
+        "a missing book is added with the event"
+    );
 
     assert_eq!(
-        view.upsert("42", &event("2"), shelve("renamed")),
+        view.upsert("42", &event(2), shelve("renamed")),
         Ok(Outcome::Applied),
         "an existing book is changed"
     );
@@ -360,12 +364,13 @@ fn upserts() {
         "an existing book is changed, not replaced"
     );
     assert_eq!(
-        got.revision, "2",
+        got.revision,
+        Some(Revision::from(2)),
         "an existing book is changed with the event"
     );
 
     assert_eq!(
-        view.upsert("42", &event("2"), shelve("replayed")),
+        view.upsert("42", &event(2), shelve("replayed")),
         Ok(Outcome::AlreadyApplied),
         "an event that is not newer is skipped"
     );
@@ -381,7 +386,7 @@ fn refuses_to_upsert_an_item_under_another_key() {
     let view = book_view();
 
     let failure = view
-        .upsert("42", &event("1"), |book| {
+        .upsert("42", &event(1), |book| {
             "no key set".clone_into(&mut book.title);
         })
         .expect_err("a missing key is refused");
@@ -400,9 +405,9 @@ fn refuses_to_upsert_an_item_under_another_key() {
         "a refused item must not be added"
     );
 
-    must_insert(&view, "2", Book::new("42"));
+    must_insert(&view, 2, Book::new("42"));
     let failure = view
-        .upsert("42", &event("3"), |book| "23".clone_into(&mut book.id))
+        .upsert("42", &event(3), |book| "23".clone_into(&mut book.id))
         .expect_err("changing the key of an existing item is refused");
     assert!(
         matches!(failure, ViewError::Permanent(_)),
@@ -413,14 +418,14 @@ fn refuses_to_upsert_an_item_under_another_key() {
 #[test]
 fn deletes_an_item() {
     let view = book_view();
-    must_insert(&view, "5", Book::new("42"));
+    must_insert(&view, 5, Book::new("42"));
 
     assert_eq!(
-        view.delete("42", &event("3")),
-        Ok(Outcome::AlreadyApplied),
+        view.delete("42", &event(3)),
+        Outcome::AlreadyApplied,
         "an older event must not delete"
     );
-    assert_eq!(view.delete("42", &event("6")), Ok(Outcome::Applied));
+    assert_eq!(view.delete("42", &event(6)), Outcome::Applied);
 
     assert_eq!(item_of(&view, "42"), None, "the book is still there");
 }
@@ -428,43 +433,46 @@ fn deletes_an_item() {
 #[test]
 fn updates_and_deletes_where_items_match() {
     let view = book_view();
-    must_insert(&view, "1", Book::new("a").on("left"));
-    must_insert(&view, "2", Book::new("b").on("right"));
-    must_insert(&view, "9", Book::new("c").on("left"));
+    must_insert(&view, 1, Book::new("a").on("left"));
+    must_insert(&view, 2, Book::new("b").on("right"));
+    must_insert(&view, 9, Book::new("c").on("left"));
 
     let on_the_left = |book: &Book| book.shelf == "left";
 
     // c has already seen a newer event, so only a is changed.
-    let changed = view.update_where(on_the_left, &event("5"), |book| {
+    let changed = view.update_where(on_the_left, &event(5), |book| {
         "left".clone_into(&mut book.title);
     });
     assert_eq!(changed, Ok(1));
     let got = must_get(&view, "a");
     assert_eq!(got.title, "left");
-    assert_eq!(got.revision, "5");
+    assert_eq!(got.revision, Some(Revision::from(5)));
 
-    assert_eq!(view.delete_where(on_the_left, &event("10")), Ok(2));
+    assert_eq!(view.delete_where(on_the_left, &event(10)), 2);
     assert_eq!(ids_in(&view), ["b"]);
 }
 
 #[test]
 fn moves_the_revision_with_a_change_that_does_nothing() {
     let view = book_view();
-    must_insert(&view, "1", Book::new("42").titled("kept"));
+    must_insert(&view, 1, Book::new("42").titled("kept"));
 
     assert_eq!(
-        view.update("42", &event("3"), |_| {}),
+        view.update("42", &event(3), |_| {}),
         Ok(Outcome::Applied),
         "a change that does nothing is still applied"
     );
 
     let got = must_get(&view, "42");
     assert_eq!(got.title, "kept");
-    assert_eq!(got.revision, "3", "the field has to follow the event");
+    assert_eq!(
+        got.revision,
+        Some(Revision::from(3)),
+        "the field has to follow the event"
+    );
 
     assert_eq!(
-        view.update("42", &event("2"), |book| "older"
-            .clone_into(&mut book.title)),
+        view.update("42", &event(2), |book| "older".clone_into(&mut book.title)),
         Ok(Outcome::AlreadyApplied),
         "the revision the view keeps has to follow the event as well"
     );
@@ -474,10 +482,10 @@ fn moves_the_revision_with_a_change_that_does_nothing() {
 #[test]
 fn keeps_revisions_without_a_field() {
     let view = InMemoryView::new(|book: &Book| book.id.clone());
-    must_insert(&view, "5", Book::new("42").titled("current"));
+    must_insert(&view, 5, Book::new("42").titled("current"));
 
     assert_eq!(
-        view.update("42", &event("5"), |book| {
+        view.update("42", &event(5), |book| {
             "replayed".clone_into(&mut book.title);
         }),
         Ok(Outcome::AlreadyApplied),
@@ -485,26 +493,15 @@ fn keeps_revisions_without_a_field() {
     );
     assert_eq!(
         must_get(&view, "42").revision,
-        "",
+        None,
         "without a field, the item carries no revision"
     );
 }
 
-/// A view with an index and two books on different shelves, which records
-/// whether a function it handed over ran.
+/// A view with an index and two books on different shelves.
 struct ViewFixture {
     view: InMemoryView<String, Book>,
     by_shelf: InMemoryIndex<String, Book, String>,
-    ran: Cell<bool>,
-}
-
-/// Everything a change may touch: the items with their revisions, the
-/// revision of the view, and what the index finds on every shelf.
-#[derive(Debug, PartialEq)]
-struct ViewState {
-    items: Vec<Book>,
-    revision: Option<String>,
-    shelves: HashMap<&'static str, Vec<String>>,
 }
 
 impl ViewFixture {
@@ -512,45 +509,25 @@ impl ViewFixture {
         let view = book_view();
         let by_shelf = view.index(|book| book.shelf.clone());
 
-        must_insert(&view, "1", Book::new("a").on("left").titled("kept"));
-        must_insert(&view, "2", Book::new("b").on("right").titled("kept"));
-        view.seen("2");
+        must_insert(&view, 1, Book::new("a").on("left").titled("kept"));
+        must_insert(&view, 2, Book::new("b").on("right").titled("kept"));
+        view.seen(Revision::from(2));
 
-        Self {
-            view,
-            by_shelf,
-            ran: Cell::new(false),
-        }
+        Self { view, by_shelf }
     }
 
     /// Returns a change that sets the given key, so that an upsert can add an
-    /// item with it, and records that it ran.
-    fn change<'f>(&'f self, key: &'f str) -> impl FnMut(&mut Book) + 'f {
+    /// item with it.
+    fn change(key: &str) -> impl FnMut(&mut Book) + '_ {
         move |book| {
-            self.ran.set(true);
             key.clone_into(&mut book.id);
             "changed".clone_into(&mut book.title);
         }
     }
 
-    /// Returns a match for the books on the given shelf, which records that
-    /// it ran.
-    fn is_on<'f>(&'f self, place: &'f str) -> impl FnMut(&Book) -> bool + 'f {
-        move |book| {
-            self.ran.set(true);
-            book.shelf == place
-        }
-    }
-
-    fn state(&self) -> ViewState {
-        ViewState {
-            items: all_of(&self.view),
-            revision: current_revision(&self.view),
-            shelves: ["left", "right", "nowhere"]
-                .into_iter()
-                .map(|shelf| (shelf, ids_of(&looked_up(&self.by_shelf, shelf))))
-                .collect(),
-        }
+    /// Returns a match for the books on the given shelf.
+    fn is_on(place: &str) -> impl FnMut(&Book) -> bool + '_ {
+        move |book| book.shelf == place
     }
 }
 
@@ -609,9 +586,9 @@ impl ViewChange {
         self,
         fixture: &ViewFixture,
         target: ViewTarget,
-        event_id: &str,
+        event_id: Revision,
     ) -> Result<Done, ViewError> {
-        let event = event(event_id);
+        let event = part_of(event_id, 0);
         let (view, by_shelf) = (&fixture.view, &fixture.by_shelf);
 
         match self {
@@ -619,65 +596,26 @@ impl ViewChange {
                 .insert(&event, Book::new(target.key).on(target.shelf))
                 .map(Done::Outcome),
             Self::Upsert => view
-                .upsert(target.key, &event, fixture.change(target.key))
+                .upsert(target.key, &event, ViewFixture::change(target.key))
                 .map(Done::Outcome),
             Self::Update => view
-                .update(target.key, &event, fixture.change(target.key))
+                .update(target.key, &event, ViewFixture::change(target.key))
                 .map(Done::Outcome),
-            Self::Delete => view.delete(target.key, &event).map(Done::Outcome),
+            Self::Delete => Ok(Done::Outcome(view.delete(target.key, &event))),
             Self::UpdateWhere => view
                 .update_where(
-                    fixture.is_on(target.shelf),
+                    ViewFixture::is_on(target.shelf),
                     &event,
-                    fixture.change(target.key),
+                    ViewFixture::change(target.key),
                 )
                 .map(Done::Count),
-            Self::DeleteWhere => view
-                .delete_where(fixture.is_on(target.shelf), &event)
-                .map(Done::Count),
+            Self::DeleteWhere => Ok(Done::Count(
+                view.delete_where(ViewFixture::is_on(target.shelf), &event),
+            )),
             Self::IndexUpdate => by_shelf
-                .update(target.shelf, &event, fixture.change(target.key))
+                .update(target.shelf, &event, ViewFixture::change(target.key))
                 .map(Done::Count),
-            Self::IndexDelete => by_shelf.delete(target.shelf, &event).map(Done::Count),
-        }
-    }
-}
-
-#[test]
-fn refuses_an_event_id_that_is_empty_or_not_a_revision_and_changes_nothing() {
-    for event_id in ["", "abc", "-1", "1.5", " 1", "9223372036854775808"] {
-        for target in [ON_A_FREE_KEY, ON_A_TAKEN_KEY] {
-            for change in VIEW_CHANGES {
-                let case = format!("{change:?} with {event_id:?} on {target:?}");
-                let fixture = ViewFixture::new();
-                let before = fixture.state();
-
-                let failure = change.apply(&fixture, target, event_id).expect_err(&case);
-
-                match &failure {
-                    ViewError::NotARevision(refusal) => {
-                        assert_eq!(refusal.revision(), event_id, "{case}");
-                    }
-                    ViewError::Permanent(_) => panic!("{case}: {failure}"),
-                }
-                assert_eq!(failure.category(), Some(Category::Permanent), "{case}");
-                assert_eq!(
-                    failure.to_string(),
-                    format!(
-                        "permanent failure: not a revision: an operation on a view needs the ID of the event it applies, not {event_id:?}"
-                    ),
-                    "{case}"
-                );
-                assert!(
-                    !fixture.ran.get(),
-                    "{case}: a function that was handed over must not run"
-                );
-                assert_eq!(
-                    fixture.state(),
-                    before,
-                    "{case}: the view has to stay as it is"
-                );
-            }
+            Self::IndexDelete => Ok(Done::Count(by_shelf.delete(target.shelf, &event))),
         }
     }
 }
@@ -708,7 +646,10 @@ fn accepts_every_revision_as_an_event_id() {
 
     // The smallest event ID is older than every item of the fixture, the
     // largest one newer.
-    let (smallest, largest) = ("0", "9223372036854775807");
+    let (smallest, largest) = (
+        Revision::from(0),
+        Revision::try_from((1_u64 << 63) - 1).expect("it is the largest revision"),
+    );
 
     for change in VIEW_CHANGES {
         let [on_free, older_on_taken, newer_on_taken] = wants(change);
@@ -755,53 +696,14 @@ fn accepts_every_revision_as_an_event_id() {
 }
 
 #[test]
-fn refuses_an_event_id_that_is_not_a_revision_where_it_is_given_not_at_the_next_change() {
-    let view = book_view();
-
-    assert!(
-        matches!(
-            view.insert(&event("abc"), Book::new("42").titled("draft")),
-            Err(ViewError::NotARevision(_))
-        ),
-        "the insert has to be refused"
-    );
-
-    // The book never got in, so the next event about it finds nothing to
-    // compare with, rather than an ID that is not a revision.
-    assert_eq!(
-        view.update("42", &event("7"), |book| "final"
-            .clone_into(&mut book.title)),
-        Ok(Outcome::Missing),
-        "the next change must not fail"
-    );
-
-    must_insert(&view, "5", Book::new("42").titled("draft"));
-
-    assert_eq!(
-        view.update("42", &event("7"), |book| "final"
-            .clone_into(&mut book.title)),
-        Ok(Outcome::Applied)
-    );
-    assert_eq!(
-        must_get(&view, "42"),
-        Book {
-            id: "42".to_owned(),
-            title: "final".to_owned(),
-            revision: "7".to_owned(),
-            ..Book::default()
-        }
-    );
-}
-
-#[test]
 fn reports_a_failure_among_several_items() {
     let view = book_view();
-    must_insert(&view, "1", Book::new("a").on("left"));
-    must_insert(&view, "2", Book::new("b").on("left"));
+    must_insert(&view, 1, Book::new("a").on("left"));
+    must_insert(&view, 2, Book::new("b").on("left"));
 
     let changed = view.update_where(
         |book| book.shelf == "left",
-        &event("3"),
+        &event(3),
         |book| "moved".clone_into(&mut book.id),
     );
 
@@ -815,17 +717,17 @@ fn reports_a_failure_among_several_items() {
 fn stays_in_order_when_many_items_are_deleted() {
     let view = book_view();
     for i in 0..40 {
-        must_insert(&view, &i.to_string(), Book::new(&format!("book-{i:02}")));
+        must_insert(&view, i, Book::new(&format!("book-{i:02}")));
     }
 
     // Deleting most items makes the view drop them from its order.
     for i in 0..30 {
         assert_eq!(
-            view.delete(format!("book-{i:02}").as_str(), &event("100")),
-            Ok(Outcome::Applied)
+            view.delete(format!("book-{i:02}").as_str(), &event(100)),
+            Outcome::Applied
         );
     }
-    must_insert(&view, "101", Book::new("book-00"));
+    must_insert(&view, 101, Book::new("book-00"));
 
     let want: Vec<String> = (30..40)
         .map(|i| format!("book-{i}"))
@@ -837,13 +739,13 @@ fn stays_in_order_when_many_items_are_deleted() {
 #[test]
 fn looks_up_items_by_value() {
     let view = book_view();
-    must_insert(&view, "1", Book::new("a").on("left"));
+    must_insert(&view, 1, Book::new("a").on("left"));
 
     // An index that is added later knows the items that are already there.
     let by_shelf = view.index(|book| book.shelf.clone());
 
-    must_insert(&view, "2", Book::new("b").on("right"));
-    must_insert(&view, "3", Book::new("c").on("left"));
+    must_insert(&view, 2, Book::new("b").on("right"));
+    must_insert(&view, 3, Book::new("c").on("left"));
 
     assert_eq!(ids_of(&looked_up(&by_shelf, "left")), ["a", "c"]);
     assert_eq!(looked_up(&by_shelf, "nowhere"), Vec::<Book>::new());
@@ -853,10 +755,10 @@ fn looks_up_items_by_value() {
 fn follows_a_changed_value() {
     let view = book_view();
     let by_shelf = view.index(|book| book.shelf.clone());
-    must_insert(&view, "1", Book::new("a").on("left"));
+    must_insert(&view, 1, Book::new("a").on("left"));
 
     assert_eq!(
-        view.update("a", &event("2"), |book| "right".clone_into(&mut book.shelf)),
+        view.update("a", &event(2), |book| "right".clone_into(&mut book.shelf)),
         Ok(Outcome::Applied)
     );
 
@@ -868,10 +770,10 @@ fn follows_a_changed_value() {
 fn hands_out_a_copy_of_what_an_index_finds() {
     let view = book_view();
     let by_shelf = view.index(|book| book.shelf.clone());
-    must_insert(&view, "1", Book::new("a").on("left"));
+    must_insert(&view, 1, Book::new("a").on("left"));
 
     let items = looked_up(&by_shelf, "left");
-    must_insert(&view, "2", Book::new("b").on("left"));
+    must_insert(&view, 2, Book::new("b").on("left"));
 
     assert_eq!(
         ids_of(&items),
@@ -884,19 +786,19 @@ fn hands_out_a_copy_of_what_an_index_finds() {
 fn updates_and_deletes_by_value() {
     let view = book_view();
     let by_shelf = view.index(|book| book.shelf.clone());
-    must_insert(&view, "1", Book::new("a").on("left"));
-    must_insert(&view, "2", Book::new("b").on("right"));
-    must_insert(&view, "9", Book::new("c").on("left"));
+    must_insert(&view, 1, Book::new("a").on("left"));
+    must_insert(&view, 2, Book::new("b").on("right"));
+    must_insert(&view, 9, Book::new("c").on("left"));
 
     assert_eq!(
-        by_shelf.update("left", &event("5"), |book| {
+        by_shelf.update("left", &event(5), |book| {
             "left".clone_into(&mut book.title);
         }),
         Ok(1),
         "only a is changed"
     );
 
-    assert_eq!(by_shelf.delete("left", &event("10")), Ok(2));
+    assert_eq!(by_shelf.delete("left", &event(10)), 2);
 
     assert_eq!(looked_up(&by_shelf, "left"), Vec::<Book>::new());
     assert_eq!(ids_in(&view), ["b"]);
@@ -917,11 +819,11 @@ fn forgets_a_value_once_no_item_has_it() {
             .collect()
     };
 
-    must_insert(&view, "1", Book::new("a").on("new"));
-    must_insert(&view, "2", Book::new("b").on("new"));
+    must_insert(&view, 1, Book::new("a").on("new"));
+    must_insert(&view, 2, Book::new("b").on("new"));
 
     assert_eq!(
-        view.update("a", &event("3"), |book| "returned"
+        view.update("a", &event(3), |book| "returned"
             .clone_into(&mut book.shelf)),
         Ok(Outcome::Applied)
     );
@@ -932,7 +834,7 @@ fn forgets_a_value_once_no_item_has_it() {
     );
 
     assert_eq!(
-        view.update("b", &event("4"), |book| "returned"
+        view.update("b", &event(4), |book| "returned"
             .clone_into(&mut book.shelf)),
         Ok(Outcome::Applied)
     );
@@ -942,8 +844,8 @@ fn forgets_a_value_once_no_item_has_it() {
         "a value that an update left behind is kept"
     );
 
-    assert_eq!(view.delete("a", &event("5")), Ok(Outcome::Applied));
-    assert_eq!(view.delete("b", &event("6")), Ok(Outcome::Applied));
+    assert_eq!(view.delete("a", &event(5)), Outcome::Applied);
+    assert_eq!(view.delete("b", &event(6)), Outcome::Applied);
     assert_eq!(
         sizes(),
         HashMap::new(),
@@ -963,7 +865,7 @@ async fn finds_an_item_by_its_key_through_the_interface() {
     }
 
     let view = book_view();
-    must_insert(&view, "1", Book::new("42").titled("Rendezvous with Rama"));
+    must_insert(&view, 1, Book::new("42").titled("Rendezvous with Rama"));
 
     assert_eq!(
         title_of(&view, "42").await.as_deref(),
@@ -987,8 +889,8 @@ async fn reads_every_item_through_the_interface() {
     }
 
     let view = book_view();
-    must_insert(&view, "1", Book::new("a").titled("Dune"));
-    must_insert(&view, "2", Book::new("b").titled("Solaris"));
+    must_insert(&view, 1, Book::new("a").titled("Dune"));
+    must_insert(&view, 2, Book::new("b").titled("Solaris"));
 
     assert_eq!(titles_of(&view).await, ["Dune", "Solaris"]);
 }
@@ -1034,24 +936,23 @@ fn hands_a_clone_to_every_change_of_an_existing_item() {
     type Change = fn(&InMemoryView<String, ShelfItem>) -> Result<(), ViewError>;
     let changes: [(&str, Change); 4] = [
         ("update", |view| {
-            view.update("a", &event("2"), rearrange).map(drop)
+            view.update("a", &event(2), rearrange).map(drop)
         }),
         ("upsert", |view| {
-            view.upsert("a", &event("2"), rearrange).map(drop)
+            view.upsert("a", &event(2), rearrange).map(drop)
         }),
         ("update_where", |view| {
-            view.update_where(|_| true, &event("2"), rearrange)
-                .map(drop)
+            view.update_where(|_| true, &event(2), rearrange).map(drop)
         }),
         ("index update", |view| {
             let by_id = view.index(|item| item.id.clone());
-            by_id.update("a", &event("2"), rearrange).map(drop)
+            by_id.update("a", &event(2), rearrange).map(drop)
         }),
     ];
 
     for (name, change) in changes {
         let view = shelf_view();
-        must_insert(&view, "1", ShelfItem::new("a"));
+        must_insert(&view, 1, ShelfItem::new("a"));
 
         let got = item_of(&view, "a").expect("the shelf is there");
         let items = all_of(&view);
@@ -1076,12 +977,9 @@ fn hands_a_clone_to_every_change_of_an_existing_item() {
 fn keeps_an_index_on_data_that_a_change_writes_into() {
     let view = shelf_view();
     let by_genre = view.index(|item| item.labels["genre"].clone());
-    must_insert(&view, "1", ShelfItem::new("a"));
+    must_insert(&view, 1, ShelfItem::new("a"));
 
-    assert_eq!(
-        view.update("a", &event("2"), rearrange),
-        Ok(Outcome::Applied)
-    );
+    assert_eq!(view.update("a", &event(2), rearrange), Ok(Outcome::Applied));
 
     assert_eq!(
         looked_up(&by_genre, "fiction"),
@@ -1266,7 +1164,7 @@ impl BookCatalog {
                 shelved.shelf.clone_into(&mut book.shelf);
             }),
             BookEvent::Discarded(_) => {
-                let removed = self.discard(event, id)?;
+                let removed = self.discard(event, id);
                 self.removed.set(self.removed.get() + removed);
                 Ok(())
             }
@@ -1312,23 +1210,21 @@ impl BookCatalog {
         }
     }
 
-    fn discard(&self, event: &Envelope<BookEvent>, id: &str) -> Result<usize, ViewError> {
+    fn discard(&self, event: &Envelope<BookEvent>, id: &str) -> usize {
         match self.removal {
-            Removal::Delete => Ok(usize::from(
-                self.view.delete(id, event)? == Outcome::Applied,
-            )),
+            Removal::Delete => usize::from(self.view.delete(id, event) == Outcome::Applied),
             Removal::DeleteWhere => self.view.delete_where(|book| book.id == id, event),
             Removal::IndexDelete => self.by_id.delete(id, event),
         }
     }
 }
 
-fn dune(shelf: &str, revision: &str) -> Book {
+fn dune(shelf: &str, revision: u32) -> Book {
     Book {
         id: "42".to_owned(),
         shelf: shelf.to_owned(),
         title: "Dune".to_owned(),
-        revision: revision.to_owned(),
+        revision: Some(Revision::from(revision)),
     }
 }
 
@@ -1351,7 +1247,7 @@ fn applies_a_later_part_that_changes_the_item_an_earlier_part_inserted() {
 
         assert_eq!(
             must_get(&catalog.view, "42"),
-            dune("A3", "0"),
+            dune("A3", 0),
             "{change:?}: the second part has to change the item"
         );
         assert_eq!(catalog.changes.get(), 1, "{change:?}");
@@ -1375,7 +1271,7 @@ fn changes_nothing_when_the_stored_event_is_applied_again() {
             )
             .unwrap_or_else(|failure| panic!("{change:?}: {failure}"));
 
-        assert_eq!(must_get(&catalog.view, "42"), dune("A3", "0"), "{change:?}");
+        assert_eq!(must_get(&catalog.view, "42"), dune("A3", 0), "{change:?}");
         assert_eq!(
             catalog.changes.get(),
             1,
@@ -1406,7 +1302,7 @@ fn applies_a_later_stored_event_after_a_split_one() {
 
         assert_eq!(
             must_get(&catalog.view, "42"),
-            dune("B7", "1"),
+            dune("B7", 1),
             "{change:?}: a later event has to be newer than every part of an earlier one"
         );
         assert_eq!(catalog.changes.get(), 2, "{change:?}");
@@ -1423,13 +1319,13 @@ fn skips_a_change_of_the_same_event_without_a_part_which_counts_as_part_0() {
     assert_eq!(
         catalog
             .view
-            .update("42", &event("0"), |book| "C1".clone_into(&mut book.shelf)),
+            .update("42", &event(0), |book| "C1".clone_into(&mut book.shelf)),
         Ok(Outcome::AlreadyApplied)
     );
     assert_eq!(
         catalog
             .view
-            .update("42", &event("1"), |book| "C1".clone_into(&mut book.shelf)),
+            .update("42", &event(1), |book| "C1".clone_into(&mut book.shelf)),
         Ok(Outcome::Applied),
         "a later event without a part has to be applied"
     );
@@ -1494,7 +1390,7 @@ fn adds_an_item_in_a_later_part_and_keeps_it_when_the_stored_event_is_applied_ag
         let want = Book {
             id: "42".to_owned(),
             title: "Dune, second copy".to_owned(),
-            revision: "1".to_owned(),
+            revision: Some(Revision::from(1)),
             ..Book::default()
         };
         assert_eq!(
@@ -1582,7 +1478,7 @@ fn upserts_in_a_later_part_the_item_an_earlier_part_added_and_skips_both_when_th
         "the first part has to add the item, and the second one has to change it"
     );
     assert_eq!(catalog.changes.get(), 2);
-    assert_eq!(must_get(&catalog.view, "42"), dune("", "0"));
+    assert_eq!(must_get(&catalog.view, "42"), dune("", 0));
 }
 
 #[test]
@@ -1607,7 +1503,7 @@ fn treats_every_event_as_part_0_without_upcasters() {
 
     assert_eq!(
         must_get(&catalog.view, "42"),
-        dune("A3", "1"),
+        dune("A3", 1),
         "an event applied again has to be skipped, as before"
     );
     assert_eq!(catalog.changes.get(), 1);
@@ -1622,15 +1518,15 @@ fn applies_every_part_of_an_event_in_order() {
     // Parts are told apart by their position, so a later part of the same
     // event is newer than an earlier one, and an earlier one is skipped.
     let view = book_view();
-    must_insert(&view, "3", Book::new("42"));
+    must_insert(&view, 3, Book::new("42"));
 
     assert_eq!(
-        view.update("42", &part_of("3", 1), |book| "A3"
+        view.update("42", &part_of(3, 1), |book| "A3"
             .clone_into(&mut book.shelf)),
         Ok(Outcome::Applied)
     );
     assert_eq!(
-        view.update("42", &part_of("3", 0), |book| "B7"
+        view.update("42", &part_of(3, 0), |book| "B7"
             .clone_into(&mut book.shelf)),
         Ok(Outcome::AlreadyApplied)
     );
@@ -1639,7 +1535,7 @@ fn applies_every_part_of_an_event_in_order() {
         Book {
             id: "42".to_owned(),
             shelf: "A3".to_owned(),
-            revision: "3".to_owned(),
+            revision: Some(Revision::from(3)),
             ..Book::default()
         },
         "the revision of an item stays the ID of the event, without the part"
@@ -1658,60 +1554,46 @@ fn a_fresh_view_has_seen_nothing() {
 #[test]
 fn revision_never_fails() {
     let view = number_view();
-    view.seen("5");
+    view.seen(Revision::from(5));
 
-    assert_eq!(current_revision(&view), Some("5".to_owned()));
+    assert_eq!(current_revision(&view), Some(Revision::from(5)));
 }
 
 #[test]
 fn seen_moves_the_revision_forward_only() {
     let view = number_view();
 
-    view.seen("5");
-    assert_eq!(current_revision(&view), Some("5".to_owned()));
+    view.seen(Revision::from(5));
+    assert_eq!(current_revision(&view), Some(Revision::from(5)));
 
     // An event that arrives twice, or out of order after a restart, must not
     // pull the revision back. Each is checked on its own, since the event that
     // arrives twice would move a revision that went back forward again.
-    view.seen("3");
+    view.seen(Revision::from(3));
     assert_eq!(
         current_revision(&view),
-        Some("5".to_owned()),
+        Some(Revision::from(5)),
         "an older event"
     );
-    view.seen("5");
+    view.seen(Revision::from(5));
     assert_eq!(
         current_revision(&view),
-        Some("5".to_owned()),
+        Some(Revision::from(5)),
         "the same event"
     );
 
-    view.seen("12");
-    assert_eq!(current_revision(&view), Some("12".to_owned()));
-}
-
-#[test]
-fn seen_ignores_what_is_not_a_revision() {
-    let view = number_view();
-    view.seen("5");
-    view.seen("nonsense");
-    view.seen("");
-
-    assert_eq!(current_revision(&view), Some("5".to_owned()));
+    view.seen(Revision::from(12));
+    assert_eq!(current_revision(&view), Some(Revision::from(12)));
 }
 
 #[tokio::test]
 async fn waiting_for_a_revision_already_reached_returns_at_once() {
     let view = number_view();
-    view.seen("10");
+    view.seen(Revision::from(10));
 
-    for (name, revision) in [
-        ("the empty revision", ""),
-        ("an older revision", "9"),
-        ("the same revision", "10"),
-    ] {
+    for (name, revision) in [("an older revision", 9), ("the same revision", 10)] {
         assert_eq!(
-            view.wait_for(revision).now_or_never(),
+            view.wait_for(Revision::from(revision)).now_or_never(),
             Some(Ok(())),
             "{name}"
         );
@@ -1724,16 +1606,16 @@ async fn waiting_returns_when_the_revision_arrives() {
 
     let waiting = {
         let view = Arc::clone(&view);
-        tokio::spawn(async move { view.wait_for("3").await })
+        tokio::spawn(async move { view.wait_for(Revision::from(3)).await })
     };
 
     // Everything below the wanted revision leaves the waiter waiting.
-    view.seen("1");
-    view.seen("2");
+    view.seen(Revision::from(1));
+    view.seen(Revision::from(2));
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(!waiting.is_finished(), "returned too early");
 
-    view.seen("3");
+    view.seen(Revision::from(3));
 
     let waited = tokio::time::timeout(Duration::from_secs(10), waiting)
         .await
@@ -1746,21 +1628,10 @@ async fn waiting_returns_when_the_revision_arrives() {
 async fn waiting_ends_when_its_future_is_dropped() {
     let view = number_view();
 
-    let waited = tokio::time::timeout(Duration::from_millis(50), view.wait_for("1")).await;
+    let waited =
+        tokio::time::timeout(Duration::from_millis(50), view.wait_for(Revision::from(1))).await;
 
     assert!(waited.is_err(), "the view has not seen the revision");
-}
-
-#[tokio::test]
-async fn waiting_for_something_that_is_not_a_revision_fails() {
-    let view = number_view();
-
-    let refusal = view
-        .wait_for("soon")
-        .await
-        .expect_err("soon is not a revision");
-
-    assert_eq!(refusal.revision(), "soon");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1771,14 +1642,15 @@ async fn many_waiters_are_all_woken_up() {
         .map(|_| {
             let view = Arc::clone(&view);
             tokio::spawn(async move {
-                tokio::time::timeout(Duration::from_secs(10), view.wait_for("4")).await
+                tokio::time::timeout(Duration::from_secs(10), view.wait_for(Revision::from(4)))
+                    .await
             })
         })
         .collect();
 
     // Several steps, so that the waiters go around more than once.
-    for id in ["1", "2", "3", "4"] {
-        view.seen(id);
+    for id in 1..=4 {
+        view.seen(Revision::from(id));
     }
 
     for waiter in waiters {

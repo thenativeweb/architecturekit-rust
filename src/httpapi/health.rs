@@ -153,7 +153,7 @@ fn describe(status: &ProjectionStatus) -> Value {
         "since": status.since,
         "hasCaughtUp": status.has_caught_up,
         "attempts": status.attempts,
-        "revision": status.revision.as_deref().unwrap_or_default(),
+        "revision": status.revision.map(|revision| revision.to_string()).unwrap_or_default(),
     })
 }
 

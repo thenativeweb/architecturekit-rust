@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    Events, Projection, ProjectionError, TransactionalProjection,
+    Events, Projection, ProjectionError, Revision, TransactionalProjection,
     projection::MADE_UP_SOURCE as SOURCE,
     store::projecting::{RebuildWriter, TransactionalWriter, Writer, drive},
 };
@@ -31,7 +31,7 @@ mod tests;
 ///
 /// let mut invented = StoredEvent::new(
 ///     "/todos/42",
-///     "0",
+///     0,
 ///     &ToDoEvent::Remembered(Remembered { intention: "Buy milk".to_owned() }),
 /// );
 /// "io.thenativeweb.todo.invented".clone_into(&mut invented.event_type);
@@ -43,7 +43,7 @@ mod tests;
 #[non_exhaustive]
 pub struct StoredEvent {
     /// The ID of the event.
-    pub id: String,
+    pub id: Revision,
     /// When the event was written.
     pub time: DateTime<Utc>,
     /// The source of the event.
@@ -72,7 +72,7 @@ impl StoredEvent {
     /// since such an event could never be stored.
     #[must_use]
     #[track_caller]
-    pub fn new<E: Events>(subject: &str, id: &str, event: &E) -> Self {
+    pub fn new<E: Events>(subject: &str, id: impl Into<Revision>, event: &E) -> Self {
         let data = match event.to_data() {
             Ok(data) => data,
             Err(error) => panic!(
@@ -82,7 +82,7 @@ impl StoredEvent {
         };
 
         Self {
-            id: id.to_owned(),
+            id: id.into(),
             time: DateTime::UNIX_EPOCH,
             source: SOURCE.to_owned(),
             subject: subject.to_owned(),
@@ -98,7 +98,7 @@ impl From<StoredEvent> for eventsourcingdb::Event {
     fn from(stored: StoredEvent) -> Self {
         let mut event = json!({
             "specversion": "1.0",
-            "id": stored.id,
+            "id": stored.id.to_string(),
             "time": stored.time,
             "source": stored.source,
             "subject": stored.subject,
@@ -134,8 +134,8 @@ pub fn stored_events<E: Events>(
 ) -> Vec<StoredEvent> {
     events
         .into_iter()
-        .enumerate()
-        .map(|(id, event)| StoredEvent::new(subject, &id.to_string(), &event))
+        .zip(0_u32..)
+        .map(|(event, id)| StoredEvent::new(subject, id, &event))
         .collect()
 }
 
@@ -147,21 +147,28 @@ pub fn stored_events<E: Events>(
 ///
 /// # Panics
 ///
-/// Fails the test if the data of an event can not be encoded as JSON.
+/// Fails the test if the data of an event can not be encoded as JSON, and if
+/// the IDs would go beyond the largest revision.
 #[must_use]
 #[track_caller]
 pub fn stored_events_at<E: Events>(
     subject: &str,
-    first_id: u64,
+    first: impl Into<Revision>,
     at: DateTime<Utc>,
     events: impl IntoIterator<Item = E>,
 ) -> Vec<StoredEvent> {
+    let first = first.into();
+
     events
         .into_iter()
         .zip(0_u32..)
         .map(|(event, offset)| {
-            let id = first_id + u64::from(offset);
-            let mut stored = StoredEvent::new(subject, &id.to_string(), &event);
+            let Ok(id) = Revision::try_from(first.get() + u64::from(offset)) else {
+                panic!(
+                    "architecturekit: stored_events_at numbers the events from {first} on beyond the largest revision"
+                );
+            };
+            let mut stored = StoredEvent::new(subject, id, &event);
             stored.time = at + TimeDelta::minutes(i64::from(offset));
             stored
         })

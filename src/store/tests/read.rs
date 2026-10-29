@@ -21,8 +21,8 @@ use super::{
 };
 use crate::{
     Categorized, Category, Event, EventOn, IfLatestEventIsMissing, LowerBound, Order, Permanent,
-    Precondition, ReadError, ReadOptions, Store, Subjects, UpperBound, read::database_options,
-    revision::tests::NOT_REVISIONS,
+    Precondition, ReadError, ReadOptions, Revision, Store, Subjects, UpperBound,
+    read::{DatabaseBounds, database_options},
 };
 
 const READ_EVENTS: &str = "/api/v1/read-events";
@@ -85,20 +85,26 @@ fn bounded(lower_bound: LowerBound, upper_bound: UpperBound) -> ReadOptions {
     }
 }
 
+/// Reads an event ID that the database has written, or that a test spells
+/// out, as a revision.
+fn revision(id: &str) -> Revision {
+    id.parse().expect("the ID is a revision")
+}
+
 fn after(id: &str) -> LowerBound {
-    LowerBound::AfterEvent(id.to_owned())
+    LowerBound::AfterEvent(revision(id))
 }
 
 fn from(id: &str) -> LowerBound {
-    LowerBound::FromEvent(id.to_owned())
+    LowerBound::FromEvent(revision(id))
 }
 
 fn up_to(id: &str) -> UpperBound {
-    UpperBound::UpToEvent(id.to_owned())
+    UpperBound::UpToEvent(revision(id))
 }
 
 fn before(id: &str) -> UpperBound {
-    UpperBound::BeforeEvent(id.to_owned())
+    UpperBound::BeforeEvent(revision(id))
 }
 
 fn from_latest_reset(subject: &str, if_missing: IfLatestEventIsMissing) -> LowerBound {
@@ -419,21 +425,10 @@ async fn refuses_options_that_check_read_options_refuses_before_the_database_is_
     );
     assert_eq!(empty.category(), None);
 
-    for (name, id) in [("an empty one", "")].into_iter().chain(NOT_REVISIONS) {
-        let refusal = read(&store, &subjects, &bounded(from(id), UpperBound::Unbounded))
-            .await
-            .expect_err(name);
-        assert!(
-            matches!(refusal, ReadError::NotARevision(_)),
-            "{name}: {refusal:?}"
-        );
-        assert_eq!(refusal.category(), None, "{name}");
-    }
-
     assert_eq!(requests.count(), 0, "the database is not asked");
 
-    // IDs that are fine, and the latest event of a type, which has no ID, go
-    // to the database.
+    // Bounds that leave room for an event, and the latest event of a type,
+    // which has no ID, go to the database.
     let _ = read(&store, &subjects, &bounded(from("0"), up_to("5")))
         .await
         .expect("the bounds are fine");
@@ -686,10 +681,11 @@ async fn refuses_exactly_the_bounds_the_database_would_refuse() {
             let options = bounded(lower_bound.clone(), upper_bound.clone());
 
             let is_refused_by_the_kit = crate::check_read_options(&options).is_err();
+            let bounds = DatabaseBounds::of(&options);
             let is_refused_by_the_database = match client
                 .read_events(
                     subjects.subject(),
-                    Some(database_options(&subjects, &options)),
+                    Some(database_options(&subjects, &options, &bounds)),
                 )
                 .await
             {

@@ -160,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 A projection applies events to views, which queries read. An `InMemoryView` keeps its items in memory, together with the revision of the event that last changed each of them, so that an event that is applied twice changes nothing:
 
 ```rust
-use architecturekit::{Envelope, InMemoryView, Projection, ViewError};
+use architecturekit::{Envelope, InMemoryView, Projection, Revision, ViewError};
 use serde::Serialize;
 
 #[derive(Clone, Default, Serialize)]
@@ -200,7 +200,7 @@ impl Projection for BookList {
         Ok(())
     }
 
-    fn seen(&self, event_id: &str) {
+    fn seen(&self, event_id: Revision) {
         self.books.seen(event_id);
     }
 }

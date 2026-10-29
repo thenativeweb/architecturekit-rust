@@ -5,7 +5,7 @@ use eventsourcingdb::request_options::{
     ReadFromLatestEventOptions,
 };
 
-use crate::{Categorized, Category, NotARevision, parse_revision};
+use crate::{Categorized, Category, Revision};
 
 #[cfg(test)]
 mod tests;
@@ -86,10 +86,10 @@ fn require_leading_slash(subject: &str) {
 /// a new major version of the client SDK, and so of the kit:
 ///
 /// ```
-/// use architecturekit::{LowerBound, Order, ReadOptions};
+/// use architecturekit::{LowerBound, Order, ReadOptions, Revision};
 ///
 /// let next_page = ReadOptions {
-///     lower_bound: LowerBound::AfterEvent("41".to_owned()),
+///     lower_bound: LowerBound::AfterEvent(Revision::from(41)),
 ///     ..ReadOptions::default()
 /// };
 ///
@@ -99,10 +99,9 @@ fn require_leading_slash(subject: &str) {
 /// };
 /// ```
 ///
-/// An ID of a bound is a string, as everywhere else in the kit. One that is not
-/// the ID of an event, such as an empty one, makes reading fail with
-/// [`NotARevision`], and bounds that leave no room for an event make it fail
-/// with [`EmptyRange`] (see [`check_read_options`]).
+/// An ID of a bound is a [`Revision`], so it is always the ID of an event, and
+/// bounds that leave no room for an event make reading fail with
+/// [`EmptyRange`] (see [`check_read_options`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReadOptions {
     /// Where the events start, at the first one unless it says otherwise.
@@ -120,10 +119,10 @@ pub enum LowerBound {
     #[default]
     Unbounded,
     /// From the event with the given ID on, including it.
-    FromEvent(String),
+    FromEvent(Revision),
     /// After the event with the given ID, leaving it out. Hand over the ID of
     /// the last event of a page to read the next one.
-    AfterEvent(String),
+    AfterEvent(Revision),
     /// From the latest event of the given type on the given subject on,
     /// including it, as [`State::from_latest`](crate::State::from_latest) does
     /// for a state. The database looks for it on that subject alone, not below
@@ -163,9 +162,9 @@ pub enum UpperBound {
     #[default]
     Unbounded,
     /// Up to the event with the given ID, including it.
-    UpToEvent(String),
+    UpToEvent(Revision),
     /// Before the event with the given ID, leaving it out.
-    BeforeEvent(String),
+    BeforeEvent(Revision),
 }
 
 /// The order in which a read hands out the events.
@@ -190,32 +189,30 @@ pub enum Order {
 ///
 /// # Errors
 ///
-/// Fails with [`NotARevision`] for the first ID of a bound that is not the ID
-/// of an event, the lower bound first, and otherwise with [`EmptyRange`] if
-/// the bounds leave no room for an event.
+/// Fails with [`EmptyRange`] if the bounds leave no room for an event.
 ///
 /// # Panics
 ///
 /// Panics for [`LowerBound::FromLatestEvent`] together with
 /// [`Order::NewestFirst`], and for a subject of it that does not start with a
-/// slash, before it checks any ID, so that a mistake in the code is not hidden
-/// behind one of the caller.
+/// slash, before it checks the range, so that a mistake in the code is not
+/// hidden behind one of the caller.
 pub fn check_read_options(options: &ReadOptions) -> Result<(), ReadOptionsError> {
     require_consistent(options);
 
     // The range holds the IDs from first on, and up to, but not including,
     // end. FromEvent(n) starts it at n and AfterEvent(n) at n+1, and
     // UpToEvent(n) ends it after n and BeforeEvent(n) at n. Counting the end
-    // that way needs no number below 0 for BeforeEvent("0"), and a revision
+    // that way needs no number below 0 for BeforeEvent(0), and a revision
     // ends at 2^63-1, so n+1 always fits.
     let first = match &options.lower_bound {
-        LowerBound::FromEvent(id) => parse_revision(id)?,
-        LowerBound::AfterEvent(id) => parse_revision(id)? + 1,
+        LowerBound::FromEvent(id) => id.get(),
+        LowerBound::AfterEvent(id) => id.get() + 1,
         LowerBound::Unbounded | LowerBound::FromLatestEvent { .. } => 0,
     };
     let end = match &options.upper_bound {
-        UpperBound::UpToEvent(id) => parse_revision(id)? + 1,
-        UpperBound::BeforeEvent(id) => parse_revision(id)?,
+        UpperBound::UpToEvent(id) => id.get() + 1,
+        UpperBound::BeforeEvent(id) => id.get(),
         UpperBound::Unbounded => END_OF_REVISIONS,
     };
 
@@ -259,36 +256,66 @@ fn describe_range(lower_bound: &LowerBound, upper_bound: &UpperBound) -> String 
             let (LowerBound::FromEvent(id) | LowerBound::AfterEvent(id)) = lower_bound else {
                 unreachable!("a range without bounds is never empty");
             };
-            return format!("after {id:?}");
+            return format!("after \"{id}\"");
         }
-        UpperBound::UpToEvent(id) => format!("up to {id:?}"),
-        UpperBound::BeforeEvent(id) => format!("before {id:?}"),
+        UpperBound::UpToEvent(id) => format!("up to \"{id}\""),
+        UpperBound::BeforeEvent(id) => format!("before \"{id}\""),
     };
 
     match (lower_bound, upper_bound) {
         (LowerBound::Unbounded | LowerBound::FromLatestEvent { .. }, _) => ending,
-        (LowerBound::AfterEvent(id), _) => format!("after {id:?} and {ending}"),
+        (LowerBound::AfterEvent(id), _) => format!("after \"{id}\" and {ending}"),
         // From one up to another reads naturally without "and".
-        (LowerBound::FromEvent(id), UpperBound::UpToEvent(_)) => format!("from {id:?} {ending}"),
-        (LowerBound::FromEvent(id), _) => format!("from {id:?} and {ending}"),
+        (LowerBound::FromEvent(id), UpperBound::UpToEvent(_)) => {
+            format!("from \"{id}\" {ending}")
+        }
+        (LowerBound::FromEvent(id), _) => format!("from \"{id}\" and {ending}"),
+    }
+}
+
+/// The bounds of a read as the client SDK takes them, with the IDs as text,
+/// which its options borrow.
+pub(crate) struct DatabaseBounds {
+    lower: Option<(BoundType, String)>,
+    upper: Option<(BoundType, String)>,
+}
+
+impl DatabaseBounds {
+    /// Writes the IDs of the bounds of the options as text.
+    pub(crate) fn of(options: &ReadOptions) -> Self {
+        Self {
+            lower: match &options.lower_bound {
+                LowerBound::Unbounded | LowerBound::FromLatestEvent { .. } => None,
+                LowerBound::FromEvent(id) => Some((BoundType::Inclusive, id.to_string())),
+                LowerBound::AfterEvent(id) => Some((BoundType::Exclusive, id.to_string())),
+            },
+            upper: match &options.upper_bound {
+                UpperBound::Unbounded => None,
+                UpperBound::UpToEvent(id) => Some((BoundType::Inclusive, id.to_string())),
+                UpperBound::BeforeEvent(id) => Some((BoundType::Exclusive, id.to_string())),
+            },
+        }
     }
 }
 
 /// Turns the options of a read of the given subjects into those of the client
-/// SDK.
+/// SDK, with the bounds written as text.
 pub(crate) fn database_options<'a>(
     subjects: &'a Subjects,
     options: &'a ReadOptions,
+    bounds: &'a DatabaseBounds,
 ) -> ReadEventsOptions<'a> {
-    let bound = |bound_type, id: &'a String| Bound {
-        bound_type,
-        id: id.as_str(),
+    let bound = |bound: &'a Option<(BoundType, String)>| {
+        bound.as_ref().map(|(bound_type, id)| Bound {
+            bound_type: bound_type.clone(),
+            id: id.as_str(),
+        })
     };
 
     let (lower_bound, from_latest_event) = match &options.lower_bound {
-        LowerBound::Unbounded => (None, None),
-        LowerBound::FromEvent(id) => (Some(bound(BoundType::Inclusive, id)), None),
-        LowerBound::AfterEvent(id) => (Some(bound(BoundType::Exclusive, id)), None),
+        LowerBound::Unbounded | LowerBound::FromEvent(_) | LowerBound::AfterEvent(_) => {
+            (bound(&bounds.lower), None)
+        }
         LowerBound::FromLatestEvent {
             subject,
             event_type,
@@ -307,12 +334,6 @@ pub(crate) fn database_options<'a>(
             }),
         ),
     };
-    let upper_bound = match &options.upper_bound {
-        UpperBound::Unbounded => None,
-        UpperBound::UpToEvent(id) => Some(bound(BoundType::Inclusive, id)),
-        UpperBound::BeforeEvent(id) => Some(bound(BoundType::Exclusive, id)),
-    };
-
     ReadEventsOptions {
         from_latest_event,
         lower_bound,
@@ -321,13 +342,12 @@ pub(crate) fn database_options<'a>(
             Order::NewestFirst => Some(Ordering::Antichronological),
         },
         recursive: subjects.recursive,
-        upper_bound,
+        upper_bound: bound(&bounds.upper),
     }
 }
 
-/// The bounds of a read leave no room for an event, such as one before `"0"`,
-/// one after `"0"` and before `"1"`, or one after the largest revision,
-/// `2^63-1`. No event can ever lie in such a range, so it is a mistake of
+/// The bounds of a read leave no room for an event, such as one before 0, one
+/// after 0 and before 1, or one after the largest revision, 2^63-1. No event can ever lie in such a range, so it is a mistake of
 /// whoever chose the bounds, which usually come from a request, and it belongs
 /// to no category. A range that is only empty for now, such as the one after
 /// the last event written so far, is no such mistake, since events can still
@@ -357,22 +377,13 @@ impl Categorized for EmptyRange {
 /// a new option, and so with a new major version.
 #[derive(Debug)]
 pub enum ReadOptionsError {
-    /// An ID of a bound is not the ID of an event.
-    NotARevision(NotARevision),
     /// The bounds leave no room for an event.
     EmptyRange(EmptyRange),
-}
-
-impl From<NotARevision> for ReadOptionsError {
-    fn from(refusal: NotARevision) -> Self {
-        Self::NotARevision(refusal)
-    }
 }
 
 impl fmt::Display for ReadOptionsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotARevision(refusal) => refusal.fmt(formatter),
             Self::EmptyRange(refusal) => refusal.fmt(formatter),
         }
     }
@@ -381,7 +392,6 @@ impl fmt::Display for ReadOptionsError {
 impl Error for ReadOptionsError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::NotARevision(refusal) => refusal.source(),
             Self::EmptyRange(refusal) => refusal.source(),
         }
     }

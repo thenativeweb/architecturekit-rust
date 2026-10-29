@@ -17,7 +17,7 @@ use futures_util::StreamExt;
 use serde_json::Value;
 
 use super::{Annotated, Counter, CounterEvent, Incremented, database::Database};
-use crate::{Command, Decider, DomainError, Event, EventOn, Precondition, Store};
+use crate::{Command, Decider, DomainError, Event, EventOn, Precondition, Revision, Store};
 
 pub(super) use super::database::SOURCE;
 
@@ -89,6 +89,13 @@ impl Increment {
                 ),
             )]
         })
+    }
+
+    /// Returns a copy that only writes if the subject is on the given event,
+    /// as [`Precondition::on_event_id`] checks it.
+    pub(super) fn on_event_id(self, event_id: Revision) -> Self {
+        let subject = self.subject.clone();
+        self.declaring(move || vec![Precondition::on_event_id(subject.clone(), event_id)])
     }
 
     /// Returns a copy that only writes if nothing has been written since the

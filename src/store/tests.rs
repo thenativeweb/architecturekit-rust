@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Categorized, Category, Event, EventOn, Events, LoadError, Permanent, Precondition,
-    RegisterSchemasError, State, Store, SubjectScheme, Transient, WriteError,
+    RegisterSchemasError, Revision, State, Store, SubjectScheme, Transient, WriteError,
 };
 
 use database::{Database, subject_for};
@@ -96,6 +96,15 @@ impl State for CounterFromLatest {
     fn from_latest() -> Option<&'static str> {
         Some(Reset::EVENT_TYPE)
     }
+}
+
+/// Returns the ID of an event that the database has written, which is always
+/// a revision.
+fn revision_of_event(event: &eventsourcingdb::Event) -> Revision {
+    event
+        .id()
+        .parse()
+        .expect("the database writes revisions as event IDs")
 }
 
 async fn write_unconditionally(store: &Store, events: Vec<EventOn>) {
@@ -376,32 +385,6 @@ async fn refuses_the_preconditions_of_a_write_before_writing() {
         assert!(failure.to_string().contains(message), "{name}: {failure}");
     }
 
-    assert_eq!(
-        store.load::<Counter>(&subject).await.expect("loads").total,
-        0,
-        "nothing was written"
-    );
-}
-
-#[tokio::test]
-async fn refuses_an_event_id_that_is_not_a_revision_without_writing() {
-    let database = Database::start().await;
-    let store = database.store().await;
-    let subject = subject_for("not-a-revision");
-
-    let failure = store
-        .write(
-            vec![EventOn::new(&subject, &Incremented { by: 1 })],
-            vec![Precondition::on_event_id(&subject, "latest")],
-        )
-        .await
-        .expect_err("latest is not a revision");
-
-    assert!(
-        matches!(failure, WriteError::NotARevision(_)),
-        "{failure:?}"
-    );
-    assert_eq!(failure.category(), None);
     assert_eq!(
         store.load::<Counter>(&subject).await.expect("loads").total,
         0,

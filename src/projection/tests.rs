@@ -7,9 +7,11 @@ use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use std::error::Error;
+
 use crate::{
     Categorized, Category, Envelope, Event, Events, Failure, Permanent, Projected, ProjectionError,
-    State, Transient, UpcastEvent, Upcasters, replay_stored,
+    Revision, State, Transient, UpcastEvent, Upcasters, replay_stored,
 };
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Event)]
@@ -58,7 +60,7 @@ fn hands_over_the_metadata_and_the_decoded_data() {
     assert_eq!(
         envelopes,
         [Envelope {
-            id: "7".to_owned(),
+            id: Revision::from(7),
             time: *event.time(),
             source: "https://thenativeweb.io".to_owned(),
             subject: "/books/42".to_owned(),
@@ -165,11 +167,11 @@ fn hands_out_every_event_an_upcaster_produces_with_its_part() {
 
     let envelopes = BookEvent::project(&split, Some(&UPCASTERS)).expect("the event is projected");
 
-    let parts: Vec<(&str, usize)> = envelopes
+    let parts: Vec<(Revision, usize)> = envelopes
         .iter()
-        .map(|envelope| (envelope.id.as_str(), envelope.part))
+        .map(|envelope| (envelope.id, envelope.part))
         .collect();
-    assert_eq!(parts, [("5", 0), ("5", 1)]);
+    assert_eq!(parts, [(Revision::from(5), 0), (Revision::from(5), 1)]);
     assert!(matches!(envelopes[1].data, BookEvent::Borrowed(_)));
 }
 
@@ -213,8 +215,12 @@ fn sees_what_a_state_with_the_same_upcasters_sees() {
         ),
     ];
 
-    let shelf: Shelf =
-        replay_stored(history.iter().map(UpcastEvent::from_stored)).expect("the state is replayed");
+    let shelf: Shelf = replay_stored(
+        history
+            .iter()
+            .map(|event| UpcastEvent::from_stored(event).expect("the ID is a revision")),
+    )
+    .expect("the state is replayed");
     let projected: Vec<String> = history
         .iter()
         .flat_map(|event| BookEvent::project(event, Some(&UPCASTERS)).expect("projected"))
@@ -247,6 +253,36 @@ fn hands_a_projection_of_stored_events_every_event_as_it_is_stored() {
         envelopes[0].event_type,
         "io.thenativeweb.test.book-acquired.v1"
     );
+}
+
+#[test]
+fn fails_permanently_for_an_event_whose_id_is_not_a_revision() {
+    let event = stored("x", BookAcquired::EVENT_TYPE, json!({ "title": "2001" }));
+
+    for (name, failure) in [
+        (
+            "an enum of events",
+            BookEvent::project(&event, None).map(drop),
+        ),
+        (
+            "stored events",
+            eventsourcingdb::Event::project(&event, None).map(drop),
+        ),
+    ] {
+        let failure = failure.expect_err(name);
+
+        assert!(matches!(failure, Permanent::Other(_)), "{name}");
+        assert_eq!(
+            failure.to_string(),
+            r#"permanent failure: event "x" on "/books/42" has an ID that is not a revision"#,
+            "{name}"
+        );
+        assert_eq!(
+            failure.source().map(ToString::to_string),
+            Some(r#"not a revision: "x""#.to_owned()),
+            "{name}"
+        );
+    }
 }
 
 #[test]

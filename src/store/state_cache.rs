@@ -2,12 +2,11 @@
 
 use std::{
     any::{Any, TypeId},
-    cmp::Ordering,
     collections::{BTreeMap, HashMap},
     sync::{Mutex, PoisonError},
 };
 
-use crate::compare_revisions;
+use crate::Revision;
 
 #[cfg(test)]
 mod tests;
@@ -20,7 +19,7 @@ type Key = (TypeId, String);
 #[derive(Debug)]
 struct Entry {
     state: Box<dyn Any + Send>,
-    last_event_id: String,
+    last_event_id: Revision,
     used: u64,
 }
 
@@ -73,7 +72,7 @@ impl StateCache {
     /// Returns a copy of the cached state of the type on the subject, together
     /// with the ID of the last event it was built from, so that the caller can
     /// not change what the cache holds.
-    pub(super) fn get<S: Clone + 'static>(&self, subject: &str) -> Option<(S, String)> {
+    pub(super) fn get<S: Clone + 'static>(&self, subject: &str) -> Option<(S, Revision)> {
         let mut entries = self.lock();
         let key = (TypeId::of::<S>(), subject.to_owned());
 
@@ -84,7 +83,7 @@ impl StateCache {
             .downcast_ref::<S>()
             .expect("the type of the state is part of the key");
 
-        Some((state.clone(), entry.last_event_id.clone()))
+        Some((state.clone(), entry.last_event_id))
     }
 
     /// Caches a state, unless a state built from a later event is cached
@@ -92,15 +91,12 @@ impl StateCache {
     /// the one that read less must not replace the one that read more. Once
     /// there are more subjects than the cache holds, it evicts the one used
     /// least recently.
-    pub(super) fn put<S: Send + 'static>(&self, subject: &str, state: S, last_event_id: String) {
+    pub(super) fn put<S: Send + 'static>(&self, subject: &str, state: S, last_event_id: Revision) {
         let mut entries = self.lock();
         let key = (TypeId::of::<S>(), subject.to_owned());
 
         if let Some(entry) = entries.by_key.get_mut(&key) {
-            if matches!(
-                compare_revisions(&last_event_id, &entry.last_event_id),
-                Ok(Ordering::Greater | Ordering::Equal)
-            ) {
+            if last_event_id >= entry.last_event_id {
                 entry.state = Box::new(state);
                 entry.last_event_id = last_event_id;
             }

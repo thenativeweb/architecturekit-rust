@@ -4,7 +4,7 @@
 use std::error::Error;
 
 use crate::{
-    Categorized, Category, DomainError, Failure, NotARevision, Permanent, Transient, parse_revision,
+    Categorized, Category, DomainError, Failure, NotARevision, Permanent, Revision, Transient,
 };
 
 #[derive(Debug)]
@@ -65,7 +65,7 @@ fn category_texts() {
             r#"permanent failure: reading "/books/42""#,
         ),
         (
-            parse_revision("x")
+            "x".parse::<Revision>()
                 .expect_err("x is not a revision")
                 .to_string(),
             r#"not a revision: "x""#,
@@ -122,7 +122,8 @@ fn every_error_names_its_category() {
         Some(Category::Permanent)
     );
     assert_eq!(
-        parse_revision("x").map_err(|refusal: NotARevision| refusal.category()),
+        "x".parse::<Revision>()
+            .map_err(|refusal: NotARevision| refusal.category()),
         Err(None),
         "a value that is not a revision belongs to no category",
     );

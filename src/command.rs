@@ -3,7 +3,7 @@ use std::{any, error::Error, fmt};
 use eventsourcingdb::error::{ClientError, code};
 use serde_json::Value;
 
-use crate::{Categorized, Category, Failure, NotARevision, Permanent, parse_revision};
+use crate::{Categorized, Category, Failure, Permanent, Revision};
 
 #[cfg(test)]
 mod tests;
@@ -60,12 +60,7 @@ pub struct Precondition {
 
 enum Kind {
     Required(eventsourcingdb::Precondition),
-    // The ID is kept apart as well, since it usually comes from the caller and
-    // is checked before anything is read.
-    OnEventId {
-        event_id: String,
-        database: eventsourcingdb::Precondition,
-    },
+    OnEventId(eventsourcingdb::Precondition),
     OnStateRead,
     Unconditionally,
 }
@@ -118,19 +113,19 @@ impl Precondition {
     /// one with the given ID, for a command that was decided on a revision the
     /// caller hands over.
     ///
-    /// The ID usually comes from the caller, so it is checked with
-    /// [`parse_revision`] before anything is read, rather than left to the
-    /// database, which would refuse it as a malformed request. For the
-    /// revision of the state that the command was decided on, use
-    /// [`on_state_read`](Precondition::on_state_read) instead.
+    /// The ID usually comes from the caller, who reads it as a [`Revision`]
+    /// first, such as with `parse`, so that a value that is not one is refused
+    /// before anything is read. For the revision of the state that the command
+    /// was decided on, use [`on_state_read`](Precondition::on_state_read)
+    /// instead.
     #[must_use]
-    pub fn on_event_id(subject: impl Into<String>, event_id: impl Into<String>) -> Self {
-        let event_id = event_id.into();
-        let database =
-            eventsourcingdb::Precondition::is_subject_on_event_id(subject, event_id.clone(), None);
-
+    pub fn on_event_id(subject: impl Into<String>, event_id: Revision) -> Self {
         Self {
-            kind: Kind::OnEventId { event_id, database },
+            kind: Kind::OnEventId(eventsourcingdb::Precondition::is_subject_on_event_id(
+                subject,
+                event_id.to_string(),
+                None,
+            )),
         }
     }
 
@@ -166,7 +161,7 @@ impl Precondition {
     #[must_use]
     pub fn database(&self) -> Option<&eventsourcingdb::Precondition> {
         match &self.kind {
-            Kind::Required(database) | Kind::OnEventId { database, .. } => Some(database),
+            Kind::Required(database) | Kind::OnEventId(database) => Some(database),
             Kind::OnStateRead | Kind::Unconditionally => None,
         }
     }
@@ -192,17 +187,15 @@ impl Precondition {
 /// without options, which is what they mean to the database.
 /// [`on_event_id`](Precondition::on_event_id) and
 /// [`require`](Precondition::require) with the same revision check are not
-/// equal, since only the former checks the ID before anything is read.
+/// equal, since they are made by different functions, which their `Debug`
+/// shows as well.
 impl PartialEq for Precondition {
     fn eq(&self, other: &Self) -> bool {
         match (&self.kind, &other.kind) {
             (Kind::Required(left), Kind::Required(right))
-            | (
-                Kind::OnEventId { database: left, .. },
-                Kind::OnEventId {
-                    database: right, ..
-                },
-            ) => checked_alike(left) == checked_alike(right),
+            | (Kind::OnEventId(left), Kind::OnEventId(right)) => {
+                checked_alike(left) == checked_alike(right)
+            }
             (Kind::OnStateRead, Kind::OnStateRead)
             | (Kind::Unconditionally, Kind::Unconditionally) => true,
             _ => false,
@@ -219,7 +212,7 @@ impl fmt::Debug for Precondition {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (made_by, database) = match &self.kind {
             Kind::Required(database) => ("require", Some(database)),
-            Kind::OnEventId { database, .. } => ("on_event_id", Some(database)),
+            Kind::OnEventId(database) => ("on_event_id", Some(database)),
             Kind::OnStateRead => ("on_state_read", None),
             Kind::Unconditionally => ("unconditionally", None),
         };
@@ -258,10 +251,7 @@ fn checked_alike(precondition: &eventsourcingdb::Precondition) -> Value {
 /// # Errors
 ///
 /// Fails with a permanent failure if the command declares none at all, or
-/// [`Precondition::unconditionally`] together with others. If nothing of that
-/// is wrong, it fails with [`NotARevision`] for the first ID of
-/// [`Precondition::on_event_id`] that is not a revision, so that a mistake in
-/// the code is not hidden behind one of the caller.
+/// [`Precondition::unconditionally`] together with others.
 pub fn check_preconditions<C: Command + ?Sized>(command: &C) -> Result<(), PreconditionsError> {
     checked_preconditions(command).map(|_| ())
 }
@@ -314,16 +304,18 @@ pub(crate) fn violated_precondition<'a>(
 pub(crate) fn resolve_preconditions(
     subject: &str,
     declared: Vec<Precondition>,
-    last_event_id: Option<&str>,
+    last_event_id: Option<Revision>,
 ) -> Vec<eventsourcingdb::Precondition> {
     declared
         .into_iter()
         .filter_map(|precondition| match precondition.kind {
-            Kind::Required(database) | Kind::OnEventId { database, .. } => Some(database),
+            Kind::Required(database) | Kind::OnEventId(database) => Some(database),
             Kind::OnStateRead => Some(match last_event_id {
-                Some(event_id) => {
-                    eventsourcingdb::Precondition::is_subject_on_event_id(subject, event_id, None)
-                }
+                Some(event_id) => eventsourcingdb::Precondition::is_subject_on_event_id(
+                    subject,
+                    event_id.to_string(),
+                    None,
+                ),
                 None => eventsourcingdb::Precondition::is_subject_pristine(subject, None),
             }),
             Kind::Unconditionally => None,
@@ -360,16 +352,10 @@ pub(crate) fn write_preconditions(
         return refuse("a write combines Precondition::unconditionally with other preconditions");
     }
 
-    for precondition in &declared {
-        if let Kind::OnEventId { event_id, .. } = &precondition.kind {
-            let _ = parse_revision(event_id).map_err(PreconditionsError::NotARevision)?;
-        }
-    }
-
     Ok(declared
         .into_iter()
         .filter_map(|precondition| match precondition.kind {
-            Kind::Required(database) | Kind::OnEventId { database, .. } => Some(database),
+            Kind::Required(database) | Kind::OnEventId(database) => Some(database),
             Kind::OnStateRead | Kind::Unconditionally => None,
         })
         .collect())
@@ -393,12 +379,6 @@ fn check(declared: &[Precondition], command: &str) -> Result<(), PreconditionsEr
         ));
     }
 
-    for precondition in declared {
-        if let Kind::OnEventId { event_id, .. } = &precondition.kind {
-            let _ = parse_revision(event_id).map_err(PreconditionsError::NotARevision)?;
-        }
-    }
-
     Ok(())
 }
 
@@ -410,16 +390,12 @@ pub enum PreconditionsError {
     /// [`Precondition::unconditionally`] together with others, which is a
     /// mistake in the code.
     Permanent(Permanent),
-    /// An ID of [`Precondition::on_event_id`] is not a revision, which is
-    /// usually a mistake of the caller.
-    NotARevision(NotARevision),
 }
 
 impl fmt::Display for PreconditionsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Permanent(failure) => failure.fmt(formatter),
-            Self::NotARevision(refusal) => refusal.fmt(formatter),
         }
     }
 }
@@ -428,7 +404,6 @@ impl Error for PreconditionsError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Permanent(failure) => failure.source(),
-            Self::NotARevision(refusal) => refusal.source(),
         }
     }
 }
@@ -437,7 +412,6 @@ impl Categorized for PreconditionsError {
     fn category(&self) -> Option<Category> {
         match self {
             Self::Permanent(failure) => failure.category(),
-            Self::NotARevision(refusal) => refusal.category(),
         }
     }
 }

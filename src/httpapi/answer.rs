@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::{HttpError, error::Chain};
-use crate::revision_of;
+use crate::{Revision, revision_of};
 
 #[cfg(test)]
 mod tests;
@@ -19,8 +19,9 @@ mod tests;
 /// {"revision":"42"}
 /// ```
 ///
-/// The revision is empty if the command wrote nothing. A handler returns it
-/// with the events that [`Store::execute`](crate::Store::execute) wrote:
+/// The revision is the empty string if the command wrote nothing. A handler
+/// returns it with the events that [`Store::execute`](crate::Store::execute)
+/// wrote:
 ///
 /// ```
 /// # use architecturekit::{Decider, DomainError, Store, httpapi::{CommandAnswer, HttpError}};
@@ -53,7 +54,7 @@ mod tests;
 #[derive(Debug)]
 #[must_use]
 pub struct CommandAnswer {
-    revision: String,
+    revision: Option<Revision>,
     fields: Fields,
 }
 
@@ -70,16 +71,15 @@ impl CommandAnswer {
     /// The answer to a command that wrote the given events.
     pub fn new(written: &[eventsourcingdb::Event]) -> Self {
         Self {
-            revision: revision_of(written).unwrap_or_default(),
+            revision: revision_of(written),
             fields: Fields::None,
         }
     }
 
-    /// Returns the revision the command wrote, which is empty if it wrote
-    /// nothing.
+    /// Returns the revision the command wrote, or `None` if it wrote nothing.
     #[must_use]
-    pub fn revision(&self) -> &str {
-        &self.revision
+    pub fn revision(&self) -> Option<Revision> {
+        self.revision
     }
 
     /// Adds further fields next to the revision, such as the ID of what the
@@ -148,7 +148,11 @@ impl From<CommandAnswer> for Response<Bytes> {
                 Map::new()
             }
         };
-        let _ = body.insert("revision".to_owned(), Value::String(answer.revision));
+        let revision = answer
+            .revision
+            .map(|revision| revision.to_string())
+            .unwrap_or_default();
+        let _ = body.insert("revision".to_owned(), Value::String(revision));
 
         json(StatusCode::OK, &Value::Object(body))
     }
