@@ -40,7 +40,7 @@ testing = []
 architecturekit-macros = { path = "architecturekit-macros", version = "=0.21.0", optional = true }
 axum = { version = "0.8.9", default-features = false, optional = true }
 bytes = { version = "1.12.1", optional = true }
-chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
+chrono = { version = "0.4.45", default-features = false, features = ["now", "serde"] }
 ed25519-dalek = "3.0.0"
 eventsourcingdb = "4.0.4"
 futures-util = "0.3.31"

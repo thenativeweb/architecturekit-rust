@@ -417,11 +417,11 @@ pub enum ProjectionError {
     /// failure of the rollback is reported alongside, never instead of. Its
     /// category is the one of the failure that made it roll back.
     #[non_exhaustive]
-    RolledBack {
+    RollbackFailed {
         /// The failure that made the transaction roll back.
         cause: Box<ProjectionError>,
         /// The failure of the rollback.
-        rollback: Box<ProjectionError>,
+        error: Box<ProjectionError>,
     },
 }
 
@@ -452,7 +452,7 @@ impl ProjectionError {
     pub(crate) fn has_panicked(&self) -> bool {
         match self {
             Self::Panicked { .. } => true,
-            Self::RolledBack { cause, rollback } => cause.has_panicked() || rollback.has_panicked(),
+            Self::RollbackFailed { cause, error } => cause.has_panicked() || error.has_panicked(),
             Self::Transient(_) | Self::Permanent(_) | Self::Projection { .. } => false,
         }
     }
@@ -475,8 +475,8 @@ impl fmt::Display for ProjectionError {
                 Category::Permanent
             ),
             Self::Projection { error, .. } => error.fmt(formatter),
-            Self::RolledBack { cause, rollback } => {
-                write!(formatter, "{cause}, and rolling back failed: {rollback}")
+            Self::RollbackFailed { cause, error } => {
+                write!(formatter, "{cause}, and rolling back failed: {error}")
             }
         }
     }
@@ -489,7 +489,7 @@ impl Error for ProjectionError {
             Self::Permanent(failure) => failure.source(),
             Self::Panicked { .. } => None,
             Self::Projection { error, .. } => error.source(),
-            Self::RolledBack { cause, .. } => Some(cause.as_ref()),
+            Self::RollbackFailed { cause, .. } => Some(cause.as_ref()),
         }
     }
 }
@@ -501,8 +501,8 @@ impl Categorized for ProjectionError {
             Self::Permanent(failure) => failure.category(),
             Self::Panicked { .. } => Some(Category::Permanent),
             Self::Projection { category, .. } => *category,
-            Self::RolledBack { rollback, .. } if rollback.has_panicked() => rollback.category(),
-            Self::RolledBack { cause, .. } => cause.category(),
+            Self::RollbackFailed { error, .. } if error.has_panicked() => error.category(),
+            Self::RollbackFailed { cause, .. } => cause.category(),
         }
     }
 }

@@ -482,11 +482,11 @@ async fn reports_a_failing_rollback_alongside_the_cause() {
             drive_all(&mut TransactionalWriter::new(&ledger), &["0"], failure, 5).await;
 
         let failure = result.expect_err(name);
-        let ProjectionError::RolledBack { cause, rollback } = &failure else {
+        let ProjectionError::RollbackFailed { cause, error } = &failure else {
             panic!("{name}: the rollback fails as well, got {failure:?}");
         };
         assert_eq!(cause.category(), Some(cause_category), "{name}");
-        assert_eq!(rollback.category(), Some(Category::Permanent), "{name}");
+        assert_eq!(error.category(), Some(Category::Permanent), "{name}");
         assert_eq!(
             failure.category(),
             Some(cause_category),
@@ -534,7 +534,7 @@ async fn reports_a_panic_in_rollback_alongside_its_cause_and_makes_it_permanent(
     .await;
 
     let failure = result.expect_err("the stream breaks, and the rollback panics");
-    let ProjectionError::RolledBack { cause, .. } = &failure else {
+    let ProjectionError::RollbackFailed { cause, .. } = &failure else {
         panic!("the rollback is reported alongside its cause, got {failure:?}");
     };
     assert!(matches!(**cause, ProjectionError::Transient(_)));

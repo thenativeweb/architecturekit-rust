@@ -284,19 +284,19 @@ fn names_the_category_of_every_failure() {
             true,
         ),
         (
-            "rolled back after a transient failure",
-            ProjectionError::RolledBack {
+            "rolling back failed after a transient failure",
+            ProjectionError::RollbackFailed {
                 cause: Box::new(ProjectionError::Transient(Transient::Other(failure()))),
-                rollback: Box::new(ProjectionError::Permanent(Permanent::Other(failure()))),
+                error: Box::new(ProjectionError::Permanent(Permanent::Other(failure()))),
             },
             Some(Category::Transient),
             false,
         ),
         (
-            "rolled back with a panic after a transient failure",
-            ProjectionError::RolledBack {
+            "rolling back panicked after a transient failure",
+            ProjectionError::RollbackFailed {
                 cause: Box::new(ProjectionError::Transient(Transient::Other(failure()))),
-                rollback: Box::new(panicked),
+                error: Box::new(panicked),
             },
             Some(Category::Permanent),
             true,

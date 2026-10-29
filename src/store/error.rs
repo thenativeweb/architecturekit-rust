@@ -308,7 +308,8 @@ impl<D: Categorized> Categorized for ExecuteError<D> {
     }
 }
 
-/// Why reading events failed.
+/// Why reading events failed. It has exactly the cases reading can end in, as
+/// the error of every operation does, so that a `match` handles all of them.
 #[derive(Debug)]
 pub enum ReadError {
     /// Trying again later may succeed, for example once the database can be

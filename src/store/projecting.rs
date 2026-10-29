@@ -329,9 +329,9 @@ fn read_failed(error: ClientError) -> ProjectionError {
 async fn roll_back<W: Writer>(writer: &mut W, cause: ProjectionError) -> ProjectionError {
     match writer.rollback().await {
         Ok(()) => cause,
-        Err(rollback) => ProjectionError::RolledBack {
+        Err(error) => ProjectionError::RollbackFailed {
             cause: Box::new(cause),
-            rollback: Box::new(rollback),
+            error: Box::new(error),
         },
     }
 }

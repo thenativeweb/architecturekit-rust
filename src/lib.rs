@@ -6,13 +6,15 @@
 //!
 //! ## Installation
 //!
-//! Add architecturekit and the client SDK for EventSourcingDB, together with serde to write and read the data of events, and Tokio to run it all:
+//! Add architecturekit, together with serde to write and read the data of events, and Tokio to run it all:
 //!
 //! ```shell
-//! cargo add architecturekit eventsourcingdb
+//! cargo add architecturekit
 //! cargo add serde --features derive
 //! cargo add tokio --features macros,rt-multi-thread
 //! ```
+//!
+//! architecturekit brings the client SDK for EventSourcingDB along as `architecturekit::eventsourcingdb`, and `ed25519_dalek` for verifying signatures as `architecturekit::ed25519_dalek`, so that their versions always fit. A new major version of the client SDK comes with a new major version of architecturekit.
 //!
 //! architecturekit needs Rust 1.88 or later. Its features are:
 //!
@@ -217,8 +219,7 @@
 //! #         Ok(vec![BookEvent::Borrowed(BookBorrowed { reader: command.reader })])
 //! #     })
 //! # }
-//! use architecturekit::Store;
-//! use eventsourcingdb::Client;
+//! use architecturekit::{Store, eventsourcingdb::Client};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1054,6 +1055,17 @@ pub use view::{InMemoryIndex, InMemoryView, KeyedView, Outcome, View, ViewError}
 
 /// Stops a run of a projection from outside (see [`Store::start_projection`]).
 pub use tokio_util::sync::CancellationToken;
+
+/// The client SDK for EventSourcingDB, whose types the kit takes and hands out,
+/// such as the [`Client`](eventsourcingdb::Client) that [`Store::builder`]
+/// takes. Use it through the kit, so that its version always fits the one of
+/// the kit: a new major version of the client SDK comes with a new major
+/// version of the kit.
+pub use eventsourcingdb;
+
+/// The crate of the key that [`StoreBuilder::signature_verification`] takes,
+/// in the version the client SDK verifies signatures with.
+pub use ed25519_dalek;
 
 #[cfg(feature = "derive")]
 pub use architecturekit_macros::{Event, Events, Schema};

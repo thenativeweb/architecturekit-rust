@@ -1,10 +1,6 @@
-use std::{
-    collections::HashSet,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::collections::HashSet;
 
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
 use http::{Response, StatusCode};
 use serde_json::{Map, Value, json};
 
@@ -154,22 +150,11 @@ fn describe(status: &ProjectionStatus) -> Value {
 
     json!({
         "phase": phase,
-        "since": time_of(status.since),
+        "since": status.since,
         "hasCaughtUp": status.has_caught_up,
         "attempts": status.attempts,
         "revision": status.revision.as_deref().unwrap_or_default(),
     })
-}
-
-/// Turns a time into one that JSON writes as RFC 3339 does. A time before
-/// 1970 or after the year 262143, which a run never has, is written as 1970.
-fn time_of(time: SystemTime) -> DateTime<Utc> {
-    let since_epoch = time.duration_since(UNIX_EPOCH).unwrap_or_default();
-
-    i64::try_from(since_epoch.as_secs())
-        .ok()
-        .and_then(|seconds| DateTime::from_timestamp(seconds, since_epoch.subsec_nanos()))
-        .unwrap_or(DateTime::UNIX_EPOCH)
 }
 
 #[cfg(feature = "axum")]

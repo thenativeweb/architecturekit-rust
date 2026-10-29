@@ -44,8 +44,7 @@ use state_cache::StateCache;
 /// all events it writes:
 ///
 /// ```no_run
-/// use architecturekit::Store;
-/// use eventsourcingdb::Client;
+/// use architecturekit::{Store, eventsourcingdb::Client};
 ///
 /// let client = Client::new("http://localhost:3000".parse().unwrap(), "secret");
 /// let store = Store::builder(client, "https://library.eventsourcingdb.io").build();

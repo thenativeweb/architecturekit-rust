@@ -79,7 +79,11 @@ fn require_leading_slash(subject: &str) {
 /// Narrows down which events [`Store::read`](crate::Store::read) hands out, or
 /// turns around the order it hands them out in. A read has one lower bound, one
 /// upper bound, and one order, so options that contradict each other can not
-/// be written:
+/// be written.
+///
+/// The options are those of a read of EventSourcingDB, which they cover in
+/// full, so they are closed on purpose: a new option of the database comes with
+/// a new major version of the client SDK, and so of the kit:
 ///
 /// ```
 /// use architecturekit::{LowerBound, Order, ReadOptions};
@@ -347,7 +351,10 @@ impl Categorized for EmptyRange {
     }
 }
 
-/// Why the options of a read are refused (see [`check_read_options`]).
+/// Why the options of a read are refused (see [`check_read_options`]). It has
+/// exactly the cases the options can be refused for, as the error of every
+/// operation does, so that a `match` handles all of them; a new one comes with
+/// a new option, and so with a new major version.
 #[derive(Debug)]
 pub enum ReadOptionsError {
     /// An ID of a bound is not the ID of an event.

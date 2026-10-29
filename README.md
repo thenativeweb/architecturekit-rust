@@ -6,13 +6,15 @@ architecturekit takes care of what such an application needs besides its domain:
 
 ## Installation
 
-Add architecturekit and the client SDK for EventSourcingDB, together with serde to write and read the data of events, and Tokio to run it all:
+Add architecturekit, together with serde to write and read the data of events, and Tokio to run it all:
 
 ```shell
-cargo add architecturekit eventsourcingdb
+cargo add architecturekit
 cargo add serde --features derive
 cargo add tokio --features macros,rt-multi-thread
 ```
+
+architecturekit brings the client SDK for EventSourcingDB along as `architecturekit::eventsourcingdb`, and `ed25519_dalek` for verifying signatures as `architecturekit::ed25519_dalek`, so that their versions always fit. A new major version of the client SDK comes with a new major version of architecturekit.
 
 architecturekit needs Rust 1.88 or later. Its features are:
 
@@ -135,8 +137,7 @@ A decider is asynchronous, so that it can load further states from the store. `D
 The store connects to EventSourcingDB through the client SDK, and names the source of the events that it writes. Register the schemas of the events once at the start, and then execute commands:
 
 ```rust
-use architecturekit::Store;
-use eventsourcingdb::Client;
+use architecturekit::{Store, eventsourcingdb::Client};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

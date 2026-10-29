@@ -504,7 +504,7 @@ async fn rolls_back_on_a_refusal() {
     .expect_err("the closing is refused");
 
     assert!(
-        matches!(failure, ProjectionError::RolledBack { .. }),
+        matches!(failure, ProjectionError::RollbackFailed { .. }),
         "the failure of the rollback has to come alongside its cause: {failure:?}"
     );
     assert_eq!(
