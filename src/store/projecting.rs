@@ -514,7 +514,7 @@ impl Reader {
         let requested = tokio::select! {
             biased;
             () = token.cancelled() => None,
-            requested = self.client.read_events(subjects.subject(), Some(options)) => Some(requested),
+            requested = self.client.read_events(subjects.subject().as_str(), Some(options)) => Some(requested),
         };
         let events = match requested {
             None => return (checkpoint, Ok(())),
@@ -575,7 +575,7 @@ impl Reader {
         let requested = tokio::select! {
             biased;
             () = token.cancelled() => None,
-            requested = self.client.observe_events(subjects.subject(), Some(options)) => Some(requested),
+            requested = self.client.observe_events(subjects.subject().as_str(), Some(options)) => Some(requested),
         };
         let events = match requested {
             None => return (caught_up_at.elapsed(), Ok(())),
@@ -652,7 +652,7 @@ impl Reader {
             if let Some(observe) = &reconnecting.observer {
                 let reconnect = Reconnect {
                     projection: run.name().map(ToOwned::to_owned),
-                    subject: subjects.subject().to_owned(),
+                    subject: subjects.subject().clone(),
                     error: Arc::clone(&failure),
                     delay,
                     attempt,

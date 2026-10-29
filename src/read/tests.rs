@@ -1,8 +1,7 @@
 // These tests check check_read_options, which Store::read applies before it
 // asks the database: every combination of bounds, empty ranges, also at the
-// largest revision and from the latest event, contradicting options, and a
-// subject that has to start with a slash. The tests of the store show that it
-// does.
+// largest revision and from the latest event, and contradicting options. The
+// tests of the store show that it does.
 //
 // The options of a read are an enum per bound and order, so two lower bounds,
 // two upper bounds, two orders, and an IfLatestEventIsMissing that is neither
@@ -10,7 +9,7 @@
 
 use crate::{
     Categorized, IfLatestEventIsMissing, LowerBound, Order, ReadOptions, ReadOptionsError,
-    Revision, Subjects, UpperBound, check_read_options,
+    Revision, Subject, Subjects, UpperBound, check_read_options,
 };
 
 const LARGEST_REVISION: &str = "9223372036854775807";
@@ -46,7 +45,7 @@ fn bounded(lower_bound: LowerBound, upper_bound: UpperBound) -> ReadOptions {
 
 fn from_latest(if_missing: IfLatestEventIsMissing) -> LowerBound {
     LowerBound::FromLatestEvent {
-        subject: "/books/42".to_owned(),
+        subject: Subject::new("/books/42"),
         event_type: "io.thenativeweb.test.reset".to_owned(),
         if_missing,
     }
@@ -332,21 +331,6 @@ fn panics_for_the_latest_event_of_a_type_newest_first() {
 }
 
 #[test]
-#[should_panic(
-    expected = r#"architecturekit: a subject starts with a slash, which "books/42" does not"#
-)]
-fn panics_for_the_latest_event_on_a_subject_without_a_leading_slash() {
-    let _ = check_read_options(&ReadOptions {
-        lower_bound: LowerBound::FromLatestEvent {
-            subject: "books/42".to_owned(),
-            event_type: "io.thenativeweb.test.reset".to_owned(),
-            if_missing: IfLatestEventIsMissing::ReadNothing,
-        },
-        ..ReadOptions::default()
-    });
-}
-
-#[test]
 #[should_panic(expected = "only oldest first")]
 fn panics_before_it_checks_the_range() {
     let _ = check_read_options(&ReadOptions {
@@ -358,25 +342,11 @@ fn panics_before_it_checks_the_range() {
 
 #[test]
 fn tells_a_subject_tree_from_an_exact_subject() {
-    let tree = Subjects::tree("/books");
-    let exact = Subjects::exact("/books");
+    let tree = Subjects::tree(Subject::new("/books"));
+    let exact = Subjects::exact(Subject::new("/books"));
 
-    assert_eq!(tree.subject(), "/books");
+    assert_eq!(tree.subject(), &Subject::new("/books"));
     assert!(tree.is_tree());
     assert!(!exact.is_tree());
     assert_ne!(tree, exact);
-}
-
-#[test]
-#[should_panic(
-    expected = r#"architecturekit: a subject starts with a slash, which "books" does not"#
-)]
-fn panics_for_a_subject_tree_without_a_leading_slash() {
-    let _ = Subjects::tree("books");
-}
-
-#[test]
-#[should_panic(expected = r#"architecturekit: a subject starts with a slash, which "" does not"#)]
-fn panics_for_an_exact_subject_without_a_leading_slash() {
-    let _ = Subjects::exact("");
 }

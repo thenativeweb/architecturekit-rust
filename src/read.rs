@@ -5,7 +5,7 @@ use eventsourcingdb::request_options::{
     ReadFromLatestEventOptions,
 };
 
-use crate::{Categorized, Category, Revision};
+use crate::{Categorized, Category, Revision, Subject};
 
 #[cfg(test)]
 mod tests;
@@ -20,7 +20,7 @@ const END_OF_REVISIONS: u64 = 1 << 63;
 /// means, rather than relying on a default.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Subjects {
-    subject: String,
+    subject: Subject,
     recursive: bool,
 }
 
@@ -28,36 +28,26 @@ impl Subjects {
     /// The given subject together with every subject below it, which is what a
     /// projection usually reads: every book below `/books`, or everything below
     /// `/`. It is what the database calls reading recursively.
-    ///
-    /// # Panics
-    ///
-    /// A subject that does not start with a slash is a programming error, so
-    /// this panics.
     #[must_use]
-    pub fn tree(subject: impl Into<String>) -> Self {
-        Self::of(subject.into(), true)
+    pub fn tree(subject: Subject) -> Self {
+        Self {
+            subject,
+            recursive: true,
+        }
     }
 
     /// The given subject alone, without the subjects below it.
-    ///
-    /// # Panics
-    ///
-    /// A subject that does not start with a slash is a programming error, so
-    /// this panics.
     #[must_use]
-    pub fn exact(subject: impl Into<String>) -> Self {
-        Self::of(subject.into(), false)
-    }
-
-    fn of(subject: String, recursive: bool) -> Self {
-        require_leading_slash(&subject);
-
-        Self { subject, recursive }
+    pub fn exact(subject: Subject) -> Self {
+        Self {
+            subject,
+            recursive: false,
+        }
     }
 
     /// Returns the subject.
     #[must_use]
-    pub fn subject(&self) -> &str {
+    pub fn subject(&self) -> &Subject {
         &self.subject
     }
 
@@ -66,14 +56,6 @@ impl Subjects {
     pub fn is_tree(&self) -> bool {
         self.recursive
     }
-}
-
-/// Panics for a subject that does not start with a slash.
-fn require_leading_slash(subject: &str) {
-    assert!(
-        subject.starts_with('/'),
-        "architecturekit: a subject starts with a slash, which {subject:?} does not"
-    );
 }
 
 /// Narrows down which events [`Store::read`](crate::Store::read) hands out, or
@@ -132,11 +114,11 @@ pub enum LowerBound {
     /// never helps.
     ///
     /// The database reads from the latest event of a type only oldest first,
-    /// so it contradicts [`Order::NewestFirst`], and a subject that does not
-    /// start with a slash is a programming error, so reading panics for either.
+    /// so it contradicts [`Order::NewestFirst`], which is a programming error,
+    /// so reading panics for it.
     FromLatestEvent {
         /// The subject to look for the event on.
-        subject: String,
+        subject: Subject,
         /// The type of the event.
         event_type: String,
         /// What to read if the subject has no event of the type yet.
@@ -194,9 +176,8 @@ pub enum Order {
 /// # Panics
 ///
 /// Panics for [`LowerBound::FromLatestEvent`] together with
-/// [`Order::NewestFirst`], and for a subject of it that does not start with a
-/// slash, before it checks the range, so that a mistake in the code is not
-/// hidden behind one of the caller.
+/// [`Order::NewestFirst`], before it checks the range, so that a mistake in
+/// the code is not hidden behind one of the caller.
 pub fn check_read_options(options: &ReadOptions) -> Result<(), ReadOptionsError> {
     require_consistent(options);
 
@@ -234,11 +215,11 @@ fn require_consistent(options: &ReadOptions) {
         ..
     } = &options.lower_bound
     {
-        require_leading_slash(subject);
         assert!(
             options.order == Order::OldestFirst,
             "architecturekit: the database reads from the latest event of a type only oldest first, \
-             but got FromLatestEvent({subject:?}, {event_type:?}) and NewestFirst"
+             but got FromLatestEvent({:?}, {event_type:?}) and NewestFirst",
+            subject.as_str(),
         );
     }
 }
@@ -329,7 +310,7 @@ pub(crate) fn database_options<'a>(
                     }
                     IfLatestEventIsMissing::ReadNothing => ReadEventMissingStrategy::ReadNothing,
                 },
-                subject,
+                subject: subject.as_str(),
                 ty: event_type,
             }),
         ),

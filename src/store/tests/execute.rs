@@ -32,7 +32,7 @@ use super::{
 };
 use crate::{
     Categorized, Category, Decider, DomainError, Error, Event, EventOn, Events, ExecuteError,
-    Precondition, Revision, State, Store, Transient, UpcastEvent, Upcasters, WriteError,
+    Precondition, Revision, State, Store, Subject, Transient, UpcastEvent, Upcasters, WriteError,
     check_preconditions,
 };
 
@@ -506,7 +506,7 @@ async fn reports_a_mistake_in_the_code_around_an_event_id_without_asking_the_dat
     let (store, requests) = unasked().await;
     let combined = || {
         vec![
-            Precondition::on_event_id("/books/42", Revision::from(7)),
+            Precondition::on_event_id(Subject::new("/books/42"), Revision::from(7)),
             Precondition::unconditionally(),
         ]
     };
@@ -528,7 +528,10 @@ async fn reports_a_mistake_in_the_code_around_an_event_id_without_asking_the_dat
             "write, with unconditionally combined with it",
             store
                 .write(
-                    vec![EventOn::new("/books/42", &Incremented { by: 1 })],
+                    vec![EventOn::new(
+                        Subject::new("/books/42"),
+                        &Incremented { by: 1 },
+                    )],
                     combined(),
                 )
                 .await
@@ -540,9 +543,12 @@ async fn reports_a_mistake_in_the_code_around_an_event_id_without_asking_the_dat
             "write, with on_state_read after it",
             store
                 .write(
-                    vec![EventOn::new("/books/42", &Incremented { by: 1 })],
+                    vec![EventOn::new(
+                        Subject::new("/books/42"),
+                        &Incremented { by: 1 },
+                    )],
                     vec![
-                        Precondition::on_event_id("/books/42", Revision::from(7)),
+                        Precondition::on_event_id(Subject::new("/books/42"), Revision::from(7)),
                         Precondition::on_state_read(),
                     ],
                 )
@@ -576,8 +582,8 @@ async fn lets_the_database_check_an_id_that_is_a_revision() {
     let seeded = store
         .write(
             vec![
-                EventOn::new(&subject, &Incremented { by: 1 }),
-                EventOn::new(&subject, &Incremented { by: 2 }),
+                EventOn::new(subject.clone(), &Incremented { by: 1 }),
+                EventOn::new(subject.clone(), &Incremented { by: 2 }),
             ],
             vec![Precondition::unconditionally()],
         )
@@ -609,7 +615,7 @@ async fn lets_the_database_check_an_id_that_is_a_revision() {
 
     let failure = store
         .write(
-            vec![EventOn::new(&subject, &Incremented { by: 1 })],
+            vec![EventOn::new(subject.clone(), &Incremented { by: 1 })],
             on(revision_of_event(&seeded[0]))(),
         )
         .await
@@ -628,7 +634,7 @@ async fn lets_the_database_check_an_id_that_is_a_revision() {
         .expect("the last event is the one to be on");
     let _ = store
         .write(
-            vec![EventOn::new(&subject, &Incremented { by: 8 })],
+            vec![EventOn::new(subject.clone(), &Incremented { by: 8 })],
             on(revision_of_event(&executed[0]))(),
         )
         .await
@@ -750,8 +756,9 @@ async fn refuses_data_that_can_not_be_encoded_as_permanent_and_writes_nothing() 
         assert_eq!(
             failure.to_string(),
             format!(
-                "permanent failure: refusing to write an event of type {event_type:?} to {subject:?}, \
-                 since its data can not be encoded as JSON"
+                "permanent failure: refusing to write an event of type {event_type:?} to {:?}, \
+                 since its data can not be encoded as JSON",
+                subject.as_str(),
             ),
             "{name}: the failure names the event type and the subject",
         );
@@ -787,7 +794,7 @@ async fn writes_none_of_the_events_if_the_second_can_not_be_encoded() {
         assert!(
             failure
                 .to_string()
-                .contains(&format!("{event_type:?} to {subject:?}")),
+                .contains(&format!("{event_type:?} to {:?}", subject.as_str())),
             "{name}: {failure}"
         );
         assert_eq!(
@@ -803,8 +810,10 @@ async fn writes_none_of_the_events_if_the_second_can_not_be_encoded() {
 /// Lets the events be written only if neither the subject nor any subject
 /// below it has events yet, which only a database that offers the v2 API can
 /// check.
-fn recursively_pristine(subject: &str) -> impl Fn() -> Vec<Precondition> + Send + Sync + 'static {
-    let subject = subject.to_owned();
+fn recursively_pristine(
+    subject: &Subject,
+) -> impl Fn() -> Vec<Precondition> + Send + Sync + 'static {
+    let subject = subject.clone();
     move || {
         vec![Precondition::require(
             eventsourcingdb::Precondition::is_subject_pristine(
@@ -842,7 +851,12 @@ async fn fails_permanently_without_sending_a_write_the_database_does_not_support
         let store = Store::builder(Client::new(url, "secret"), SOURCE).build();
 
         let failure = write
-            .remark(&store, "/test", "a remark", recursively_pristine("/test"))
+            .remark(
+                &store,
+                &Subject::new("/test"),
+                "a remark",
+                recursively_pristine(&Subject::new("/test")),
+            )
             .await
             .expect_err("the database offers just the v1 API");
 

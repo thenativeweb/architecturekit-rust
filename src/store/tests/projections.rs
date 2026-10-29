@@ -19,7 +19,7 @@ use super::{
 };
 use crate::{
     Categorized, Category, Envelope, EventOn, Precondition, Projection, ProjectionError,
-    ResumableProjection, Revision, Store, Subjects, Transaction, TransactionalProjection,
+    ResumableProjection, Revision, Store, Subject, Subjects, Transaction, TransactionalProjection,
 };
 
 /// The failure of a projection of a test, of the given category.
@@ -225,12 +225,12 @@ impl Projection for Stored {
 
 /// Writes increments by the given amounts to the subject, and returns their
 /// IDs.
-async fn increment(store: &Store, subject: &str, amounts: &[i64]) -> Vec<Revision> {
+async fn increment(store: &Store, subject: &Subject, amounts: &[i64]) -> Vec<Revision> {
     store
         .write(
             amounts
                 .iter()
-                .map(|by| EventOn::new(subject, &Incremented { by: *by }))
+                .map(|by| EventOn::new(subject.clone(), &Incremented { by: *by }))
                 .collect(),
             vec![Precondition::unconditionally()],
         )
@@ -250,7 +250,7 @@ async fn applies_what_is_stored() {
     let totals = Totals::default();
 
     store
-        .catch_up_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect("the projection catches up");
 
@@ -261,13 +261,13 @@ async fn applies_what_is_stored() {
 async fn reads_a_subject_tree() {
     let database = Database::start().await;
     let store = database.store().await;
-    let _ = increment(&store, "/books/42", &[1]).await;
-    let _ = increment(&store, "/books/42/notes", &[2]).await;
-    let _ = increment(&store, "/readers/7", &[4]).await;
+    let _ = increment(&store, &Subject::new("/books/42"), &[1]).await;
+    let _ = increment(&store, &Subject::new("/books/42/notes"), &[2]).await;
+    let _ = increment(&store, &Subject::new("/readers/7"), &[4]).await;
     let totals = Totals::default();
 
     store
-        .catch_up_projection(&Subjects::tree("/books"), &totals)
+        .catch_up_projection(&Subjects::tree(Subject::new("/books")), &totals)
         .await
         .expect("the projection catches up");
 
@@ -282,7 +282,7 @@ async fn leaves_out_events_of_types_the_projection_has_no_variant_for() {
     let _ = increment(&store, &subject, &[1]).await;
     let _ = store
         .write(
-            vec![EventOn::new(&subject, &Unrelated {})],
+            vec![EventOn::new(subject.clone(), &Unrelated {})],
             vec![Precondition::unconditionally()],
         )
         .await
@@ -290,7 +290,7 @@ async fn leaves_out_events_of_types_the_projection_has_no_variant_for() {
     let totals = Totals::default();
 
     store
-        .catch_up_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect("the projection catches up");
 
@@ -305,7 +305,7 @@ async fn has_nothing_to_do_without_events() {
     database
         .store()
         .await
-        .catch_up_projection(&Subjects::tree("/"), &totals)
+        .catch_up_projection(&Subjects::tree(Subject::new("/")), &totals)
         .await
         .expect("there is nothing to do");
 
@@ -324,7 +324,7 @@ async fn resumes_from_its_checkpoint() {
     };
 
     store
-        .catch_up_resumable_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_resumable_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect("the projection catches up");
 
@@ -345,7 +345,7 @@ async fn saves_the_checkpoint_once_per_batch_while_catching_up() {
     };
 
     store
-        .catch_up_resumable_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_resumable_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect("the projection catches up");
 
@@ -364,7 +364,7 @@ async fn reports_a_failing_apply_with_its_category() {
     };
 
     let failure = store
-        .catch_up_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect_err("the projection refuses");
 
@@ -391,7 +391,7 @@ async fn stops_when_the_checkpoint_can_not_be_read() {
     };
 
     let failure = store
-        .catch_up_resumable_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_resumable_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect_err("the checkpoint can not be read");
 
@@ -411,14 +411,14 @@ async fn commits_a_transaction_with_the_last_event_id_and_resumes_from_it() {
     let ledger = Ledger::default();
 
     store
-        .catch_up_transactional_projection(&Subjects::exact(&subject), &ledger)
+        .catch_up_transactional_projection(&Subjects::exact(subject.clone()), &ledger)
         .await
         .expect("the projection catches up");
     assert_eq!(ledger.committed(), (3, Some(first[1])));
 
     let second = increment(&store, &subject, &[4]).await;
     store
-        .catch_up_transactional_projection(&Subjects::exact(&subject), &ledger)
+        .catch_up_transactional_projection(&Subjects::exact(subject.clone()), &ledger)
         .await
         .expect("the projection catches up again");
     assert_eq!(
@@ -434,7 +434,7 @@ async fn comes_back_from_catching_up_as_an_error_wherever_the_projection_panics(
     let store = database.store().await;
     let subject = subject_for("catch-up-panics");
     let _ = increment(&store, &subject, &[1]).await;
-    let subjects = Subjects::exact(&subject);
+    let subjects = Subjects::exact(subject.clone());
 
     let mut failures = Vec::new();
     for function in ["apply", "checkpoint", "save_checkpoint"] {
@@ -481,8 +481,8 @@ async fn hands_a_projection_of_stored_events_every_event_with_its_hash() {
     let _ = store
         .write(
             vec![
-                EventOn::new(&subject, &Reset {}),
-                EventOn::new(&subject, &Unrelated {}),
+                EventOn::new(subject.clone(), &Reset {}),
+                EventOn::new(subject.clone(), &Unrelated {}),
             ],
             vec![Precondition::unconditionally()],
         )
@@ -491,7 +491,7 @@ async fn hands_a_projection_of_stored_events_every_event_with_its_hash() {
     let stored = Stored(Mutex::new(Vec::new()));
 
     store
-        .catch_up_projection(&Subjects::exact(&subject), &stored)
+        .catch_up_projection(&Subjects::exact(subject.clone()), &stored)
         .await
         .expect("the projection catches up");
 

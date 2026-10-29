@@ -6,7 +6,7 @@
 //! A decider decides asynchronously, so a test waits for its decision:
 //!
 //! ```
-//! # use architecturekit::{Command, Event, Events, Precondition, State};
+//! # use architecturekit::{Command, Event, Events, Precondition, State, Subject};
 //! # use serde::{Deserialize, Serialize};
 //! # #[derive(Serialize, Deserialize, Event)]
 //! # #[event(type = "io.eventsourcingdb.library.book-acquired")]
@@ -28,9 +28,9 @@
 //! #     }
 //! # }
 //! # #[derive(Clone)]
-//! # struct BorrowBook { book_id: String, reader: String }
+//! # struct BorrowBook { book: Subject, reader: String }
 //! # impl Command for BorrowBook {
-//! #     fn subject(&self) -> String { format!("/books/{}", self.book_id) }
+//! #     fn subject(&self) -> Subject { self.book.clone() }
 //! #     fn preconditions(&self) -> Vec<Precondition> { vec![Precondition::on_state_read()] }
 //! # }
 //! # #[derive(Debug, PartialEq)]
@@ -49,7 +49,7 @@
 //!
 //! // In a #[tokio::test]:
 //! given(&borrow_book, [BookEvent::Acquired(BookAcquired { title: "2001".to_owned() })])
-//!     .when(BorrowBook { book_id: "42".to_owned(), reader: "Jane".to_owned() })
+//!     .when(BorrowBook { book: Subject::new("/books/42"), reader: "Jane".to_owned() })
 //!     .await
 //!     .then_events([BookEvent::Borrowed(BookBorrowed { reader: "Jane".to_owned() })])
 //!     .then_preconditions([Precondition::on_state_read()]);

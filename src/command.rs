@@ -3,7 +3,7 @@ use std::{any, error::Error, fmt};
 use eventsourcingdb::error::{ClientError, code};
 use serde_json::Value;
 
-use crate::{Categorized, Category, Failure, Permanent, Revision};
+use crate::{Categorized, Category, Failure, Permanent, Revision, Subject};
 
 #[cfg(test)]
 mod tests;
@@ -16,17 +16,17 @@ mod tests;
 /// of its own:
 ///
 /// ```
-/// use architecturekit::{Command, Precondition};
+/// use architecturekit::{Command, Precondition, Subject};
 ///
 /// #[derive(Clone)]
 /// struct AcquireBook {
-///     book_id: String,
+///     book: Subject,
 ///     title: String,
 /// }
 ///
 /// impl Command for AcquireBook {
-///     fn subject(&self) -> String {
-///         format!("/books/{}", self.book_id)
+///     fn subject(&self) -> Subject {
+///         self.book.clone()
 ///     }
 ///
 ///     fn preconditions(&self) -> Vec<Precondition> {
@@ -36,7 +36,7 @@ mod tests;
 /// ```
 pub trait Command {
     /// Returns the subject the command acts on.
-    fn subject(&self) -> String;
+    fn subject(&self) -> Subject;
 
     /// Returns the conditions under which the events of the command may be
     /// written, at least one of them.
@@ -88,7 +88,7 @@ impl Precondition {
     /// same as [`require`](Precondition::require) with
     /// `eventsourcingdb::Precondition::is_subject_pristine`.
     #[must_use]
-    pub fn on_pristine_subject(subject: impl Into<String>) -> Self {
+    pub fn on_pristine_subject(subject: Subject) -> Self {
         Self::require(eventsourcingdb::Precondition::is_subject_pristine(
             subject, None,
         ))
@@ -103,7 +103,7 @@ impl Precondition {
     /// An older database refuses the write, which then fails with a permanent
     /// failure.
     #[must_use]
-    pub fn on_populated_subject(subject: impl Into<String>) -> Self {
+    pub fn on_populated_subject(subject: Subject) -> Self {
         Self::require(eventsourcingdb::Precondition::is_subject_populated(
             subject, None,
         ))
@@ -119,7 +119,7 @@ impl Precondition {
     /// was decided on, use [`on_state_read`](Precondition::on_state_read)
     /// instead.
     #[must_use]
-    pub fn on_event_id(subject: impl Into<String>, event_id: Revision) -> Self {
+    pub fn on_event_id(subject: Subject, event_id: Revision) -> Self {
         Self {
             kind: Kind::OnEventId(eventsourcingdb::Precondition::is_subject_on_event_id(
                 subject,
@@ -302,7 +302,7 @@ pub(crate) fn violated_precondition<'a>(
 /// declared one. Only [`Precondition::unconditionally`] turns into none, but a
 /// command declares it alone, so then nothing is checked at all.
 pub(crate) fn resolve_preconditions(
-    subject: &str,
+    subject: &Subject,
     declared: Vec<Precondition>,
     last_event_id: Option<Revision>,
 ) -> Vec<eventsourcingdb::Precondition> {
@@ -312,11 +312,11 @@ pub(crate) fn resolve_preconditions(
             Kind::Required(database) | Kind::OnEventId(database) => Some(database),
             Kind::OnStateRead => Some(match last_event_id {
                 Some(event_id) => eventsourcingdb::Precondition::is_subject_on_event_id(
-                    subject,
+                    subject.as_str(),
                     event_id.to_string(),
                     None,
                 ),
-                None => eventsourcingdb::Precondition::is_subject_pristine(subject, None),
+                None => eventsourcingdb::Precondition::is_subject_pristine(subject.as_str(), None),
             }),
             Kind::Unconditionally => None,
         })

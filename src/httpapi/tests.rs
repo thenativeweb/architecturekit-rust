@@ -3,7 +3,10 @@
 // a database in a container of its own, any other one against a store whose
 // database can not be reached, which it never reaches.
 
-use std::{future, io, sync::Arc};
+use std::{
+    future, io,
+    sync::{Arc, LazyLock},
+};
 
 use axum::{
     Router,
@@ -20,7 +23,7 @@ use tokio::net::TcpListener;
 use tower::ServiceExt;
 
 use crate::{
-    Command, Decider, DomainError, Event, Events, Precondition, Store,
+    Command, Decider, DomainError, Event, Events, Precondition, Store, Subject, SubjectScheme,
     httpapi::{CommandAnswer, HttpError, MAX_REQUEST_BODY, Strict},
     testing::Database,
 };
@@ -52,16 +55,18 @@ impl crate::State for Counter {
     }
 }
 
+static COUNTERS: LazyLock<SubjectScheme> = LazyLock::new(|| SubjectScheme::new("/counters/{id}"));
+
 #[derive(Clone, Debug)]
 struct Increment {
-    counter_id: String,
+    counter: Subject,
     by: u32,
     only_if_new: bool,
 }
 
 impl Command for Increment {
-    fn subject(&self) -> String {
-        format!("/counters/{}", self.counter_id)
+    fn subject(&self) -> Subject {
+        self.counter.clone()
     }
 
     fn preconditions(&self) -> Vec<Precondition> {
@@ -130,13 +135,14 @@ async fn increment(
     _: Caller,
     Strict(request): Strict<IncrementRequest>,
 ) -> Result<CommandAnswer, HttpError> {
+    let counter = COUNTERS.try_build(&[&counter_id])?;
     if request.by > 100 {
         return Err(HttpError::malformed("by has to be at most 100"));
     }
     let _ = request.note;
 
     let command = Increment {
-        counter_id: counter_id.clone(),
+        counter,
         by: request.by,
         only_if_new: false,
     };
@@ -153,7 +159,7 @@ async fn create(
     Strict(request): Strict<IncrementRequest>,
 ) -> Result<CommandAnswer, HttpError> {
     let command = Increment {
-        counter_id,
+        counter: COUNTERS.try_build(&[&counter_id])?,
         by: request.by,
         only_if_new: true,
     };
@@ -323,6 +329,21 @@ async fn a_command_that_cannot_be_built_is_rejected() {
     assert_eq!(
         body,
         json!({ "message": "malformed request: by has to be at most 100" })
+    );
+}
+
+#[tokio::test]
+async fn an_id_that_can_not_be_part_of_a_subject_is_rejected_with_400() {
+    let router = router(unreachable_store().await);
+
+    let (status, body) = send(router, json_to("/counters/a.b/increment", r#"{"by":1}"#)).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({
+            "message": r#"value "a.b" for "id" may only contain A-Z, a-z, 0-9, underscores, and hyphens"#
+        })
     );
 }
 

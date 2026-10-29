@@ -26,7 +26,7 @@ use serde_json::json;
 
 use crate::{
     Categorized, Category, Envelope, Event, Events, InMemoryIndex, InMemoryView, KeyedView,
-    Outcome, Projected, Revision, Revisioned, UpcastEvent, Upcasters, View, ViewError,
+    Outcome, Projected, Revision, Revisioned, Subject, UpcastEvent, Upcasters, View, ViewError,
     projection::tests::stored,
 };
 
@@ -73,7 +73,7 @@ fn part_of(id: impl Into<Revision>, part: usize) -> Envelope<()> {
         id: id.into(),
         time: DateTime::UNIX_EPOCH,
         source: "https://thenativeweb.io".to_owned(),
-        subject: "/books/42".to_owned(),
+        subject: Subject::new("/books/42"),
         event_type: "io.thenativeweb.test.book-acquired".to_owned(),
         trace_parent: None,
         trace_state: None,
@@ -1149,7 +1149,7 @@ impl BookCatalog {
     }
 
     fn handle(&self, event: &Envelope<BookEvent>) -> Result<(), ViewError> {
-        let id = event.subject.trim_start_matches("/books/");
+        let id = event.subject.as_str().trim_start_matches("/books/");
 
         match &event.data {
             BookEvent::Acquired(acquired) => {

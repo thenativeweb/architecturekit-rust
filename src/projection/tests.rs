@@ -11,7 +11,7 @@ use std::error::Error;
 
 use crate::{
     Categorized, Category, Envelope, Event, Events, Failure, Permanent, Projected, ProjectionError,
-    Revision, State, Transient, UpcastEvent, Upcasters, replay_stored,
+    Revision, State, Subject, Transient, UpcastEvent, Upcasters, replay_stored,
 };
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Event)]
@@ -63,7 +63,7 @@ fn hands_over_the_metadata_and_the_decoded_data() {
             id: Revision::from(7),
             time: *event.time(),
             source: "https://thenativeweb.io".to_owned(),
-            subject: "/books/42".to_owned(),
+            subject: Subject::new("/books/42"),
             event_type: BookAcquired::EVENT_TYPE.to_owned(),
             trace_parent: Some(
                 "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01".to_owned()
@@ -280,6 +280,44 @@ fn fails_permanently_for_an_event_whose_id_is_not_a_revision() {
         assert_eq!(
             failure.source().map(ToString::to_string),
             Some(r#"not a revision: "x""#.to_owned()),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn fails_permanently_for_an_event_whose_subject_is_not_one() {
+    let mut event = serde_json::to_value(stored(
+        "7",
+        BookAcquired::EVENT_TYPE,
+        json!({ "title": "2001" }),
+    ))
+    .expect("a stored event is JSON");
+    event["subject"] = json!("books/42");
+    let event: eventsourcingdb::Event =
+        serde_json::from_value(event).expect("the client SDK reads it");
+
+    for (name, failure) in [
+        (
+            "an enum of events",
+            BookEvent::project(&event, None).map(drop),
+        ),
+        (
+            "stored events",
+            eventsourcingdb::Event::project(&event, None).map(drop),
+        ),
+    ] {
+        let failure = failure.expect_err(name);
+
+        assert!(matches!(failure, Permanent::Other(_)), "{name}");
+        assert_eq!(
+            failure.to_string(),
+            r#"permanent failure: event "7" is on "books/42", which is not a subject"#,
+            "{name}"
+        );
+        assert_eq!(
+            failure.source().map(ToString::to_string),
+            Some(r#"not a subject: "books/42", which does not start with a slash"#.to_owned()),
             "{name}"
         );
     }

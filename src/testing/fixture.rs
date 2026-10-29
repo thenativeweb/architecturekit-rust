@@ -3,8 +3,8 @@ use std::{error::Error, fmt};
 use serde_json::Value;
 
 use crate::{
-    Command, Decider, Events, ExecuteError, Precondition, State, UpcastEvent, check_preconditions,
-    replay, replay_stored, store::unencodable,
+    Command, Decider, Events, ExecuteError, Precondition, State, Subject, UpcastEvent,
+    check_preconditions, replay, replay_stored, store::unencodable,
 };
 
 #[cfg(test)]
@@ -108,13 +108,13 @@ struct Decided<E> {
 
 /// Encodes the data of every event as JSON, as executing does, and refuses all
 /// of them with the same error if the data of one of them can not be encoded.
-fn encode<E: Events, D>(subject: &str, events: Vec<E>) -> Result<Decided<E>, ExecuteError<D>> {
+fn encode<E: Events, D>(subject: &Subject, events: Vec<E>) -> Result<Decided<E>, ExecuteError<D>> {
     let data = events
         .iter()
         .map(|event| {
             event
                 .to_data()
-                .map_err(|cause| unencodable(event.event_type(), subject, cause))
+                .map_err(|cause| unencodable(event.event_type(), subject.as_str(), cause))
         })
         .collect::<Result<Vec<_>, _>>()?;
 

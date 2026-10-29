@@ -240,7 +240,7 @@ pub struct LiteralOptions;
 ///     id: architecturekit::Revision::from(0),
 ///     time: chrono::DateTime::UNIX_EPOCH,
 ///     source: "https://library.eventsourcingdb.io".to_owned(),
-///     subject: "/books/42".to_owned(),
+///     subject: architecturekit::Subject::new("/books/42"),
 ///     event_type: "io.eventsourcingdb.library.book-acquired".to_owned(),
 ///     trace_parent: None,
 ///     trace_state: None,

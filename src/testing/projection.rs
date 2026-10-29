@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    Events, Projection, ProjectionError, Revision, TransactionalProjection,
+    Events, Projection, ProjectionError, Revision, Subject, TransactionalProjection,
     projection::MADE_UP_SOURCE as SOURCE,
     store::projecting::{RebuildWriter, TransactionalWriter, Writer, drive},
 };
@@ -27,10 +27,10 @@ mod tests;
 /// # struct Remembered { intention: String }
 /// # #[derive(Events)]
 /// # enum ToDoEvent { Remembered(Remembered) }
-/// use architecturekit::testing::StoredEvent;
+/// use architecturekit::{Subject, testing::StoredEvent};
 ///
 /// let mut invented = StoredEvent::new(
-///     "/todos/42",
+///     Subject::new("/todos/42"),
 ///     0,
 ///     &ToDoEvent::Remembered(Remembered { intention: "Buy milk".to_owned() }),
 /// );
@@ -49,7 +49,7 @@ pub struct StoredEvent {
     /// The source of the event.
     pub source: String,
     /// The subject of the event.
-    pub subject: String,
+    pub subject: Subject,
     /// The type of the event.
     pub event_type: String,
     /// The data of the event, as JSON.
@@ -72,7 +72,7 @@ impl StoredEvent {
     /// since such an event could never be stored.
     #[must_use]
     #[track_caller]
-    pub fn new<E: Events>(subject: &str, id: impl Into<Revision>, event: &E) -> Self {
+    pub fn new<E: Events>(subject: Subject, id: impl Into<Revision>, event: &E) -> Self {
         let data = match event.to_data() {
             Ok(data) => data,
             Err(error) => panic!(
@@ -85,7 +85,7 @@ impl StoredEvent {
             id: id.into(),
             time: DateTime::UNIX_EPOCH,
             source: SOURCE.to_owned(),
-            subject: subject.to_owned(),
+            subject,
             event_type: event.event_type().to_owned(),
             data,
             trace_parent: None,
@@ -101,7 +101,7 @@ impl From<StoredEvent> for eventsourcingdb::Event {
             "id": stored.id.to_string(),
             "time": stored.time,
             "source": stored.source,
-            "subject": stored.subject,
+            "subject": stored.subject.as_str(),
             "type": stored.event_type,
             "datacontenttype": "application/json",
             "data": stored.data,
@@ -129,13 +129,13 @@ impl From<StoredEvent> for eventsourcingdb::Event {
 #[must_use]
 #[track_caller]
 pub fn stored_events<E: Events>(
-    subject: &str,
+    subject: &Subject,
     events: impl IntoIterator<Item = E>,
 ) -> Vec<StoredEvent> {
     events
         .into_iter()
         .zip(0_u32..)
-        .map(|(event, id)| StoredEvent::new(subject, id, &event))
+        .map(|(event, id)| StoredEvent::new(subject.clone(), id, &event))
         .collect()
 }
 
@@ -152,7 +152,7 @@ pub fn stored_events<E: Events>(
 #[must_use]
 #[track_caller]
 pub fn stored_events_at<E: Events>(
-    subject: &str,
+    subject: &Subject,
     first: impl Into<Revision>,
     at: DateTime<Utc>,
     events: impl IntoIterator<Item = E>,
@@ -168,7 +168,7 @@ pub fn stored_events_at<E: Events>(
                     "architecturekit: stored_events_at numbers the events from {first} on beyond the largest revision"
                 );
             };
-            let mut stored = StoredEvent::new(subject, id, &event);
+            let mut stored = StoredEvent::new(subject.clone(), id, &event);
             stored.time = at + TimeDelta::minutes(i64::from(offset));
             stored
         })
@@ -189,7 +189,7 @@ pub fn stored_events_at<E: Events>(
 /// A projection is driven asynchronously, so a test waits for it:
 ///
 /// ```
-/// # use architecturekit::{Envelope, Event, Events, InMemoryView, Projection, ViewError};
+/// # use architecturekit::{Envelope, Event, Events, InMemoryView, Projection, Subject, ViewError};
 /// # use serde::{Deserialize, Serialize};
 /// # #[derive(Serialize, Deserialize, Event)]
 /// # #[event(type = "io.thenativeweb.library.book-acquired")]
@@ -216,7 +216,10 @@ pub fn stored_events_at<E: Events>(
 /// // In a #[tokio::test]:
 /// project(
 ///     &book_list,
-///     &stored_events("/books/42", [BookEvent::Acquired(BookAcquired { title: "2001".to_owned() })]),
+///     &stored_events(
+///         &Subject::new("/books/42"),
+///         [BookEvent::Acquired(BookAcquired { title: "2001".to_owned() })],
+///     ),
 /// )
 /// .await
 /// .expect("the events are applied");

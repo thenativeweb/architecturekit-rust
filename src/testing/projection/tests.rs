@@ -16,7 +16,8 @@ use serde_json::json;
 
 use crate::{
     Categorized, Category, Envelope, Event, Events, InMemoryView, Projection, ProjectionError,
-    Revision, Transaction, TransactionalProjection, UpcastEvent, Upcasters, View, ViewError,
+    Revision, Subject, Transaction, TransactionalProjection, UpcastEvent, Upcasters, View,
+    ViewError,
     testing::{StoredEvent, project, project_transactional, stored_events, stored_events_at},
 };
 
@@ -179,9 +180,9 @@ impl Projection for TypedOwners {
 
 #[test]
 fn carries_what_a_database_would() {
-    let stored = StoredEvent::new("/account/1", 7, &opened("golo"));
+    let stored = StoredEvent::new(Subject::new("/account/1"), 7, &opened("golo"));
 
-    assert_eq!(stored.subject, "/account/1");
+    assert_eq!(stored.subject, Subject::new("/account/1"));
     assert_eq!(stored.id, Revision::from(7));
     assert_eq!(stored.event_type, Opened::EVENT_TYPE);
     assert_eq!(stored.data, json!({ "owner": "golo" }));
@@ -205,7 +206,11 @@ fn carries_what_a_database_would() {
     expected = r#"architecturekit: StoredEvent::new can not encode an event of type "test.account.unencodable": refusing to be encoded"#
 )]
 fn panics_on_an_event_that_can_not_be_encoded() {
-    let _ = StoredEvent::new("/account/1", 0, &AccountEvent::Unencodable(Unencodable {}));
+    let _ = StoredEvent::new(
+        Subject::new("/account/1"),
+        0,
+        &AccountEvent::Unencodable(Unencodable {}),
+    );
 }
 
 #[test]
@@ -217,7 +222,7 @@ fn turns_into_the_event_of_the_client_sdk_with_every_field() {
         data: json!("not an object"),
         trace_parent: Some("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01".to_owned()),
         trace_state: Some("vendor=value".to_owned()),
-        ..StoredEvent::new("/account/1", 7, &opened("golo"))
+        ..StoredEvent::new(Subject::new("/account/1"), 7, &opened("golo"))
     };
 
     let event: eventsourcingdb::Event = stored.into();
@@ -241,7 +246,10 @@ fn turns_into_the_event_of_the_client_sdk_with_every_field() {
 
 #[test]
 fn numbers_from_zero() {
-    let stored = stored_events("/account/1", [opened("golo"), closed(), opened("jane")]);
+    let stored = stored_events(
+        &Subject::new("/account/1"),
+        [opened("golo"), closed(), opened("jane")],
+    );
 
     let ids: Vec<Revision> = stored.iter().map(|event| event.id).collect();
     assert_eq!(ids, [0, 1, 2].map(Revision::from));
@@ -252,7 +260,7 @@ fn numbers_up_to_the_largest_revision() {
     let largest = Revision::try_from((1_u64 << 63) - 1).expect("it is the largest revision");
 
     let stored = stored_events_at(
-        "/account/1",
+        &Subject::new("/account/1"),
         largest,
         DateTime::UNIX_EPOCH,
         [opened("golo")],
@@ -269,7 +277,7 @@ fn panics_for_ids_beyond_the_largest_revision() {
     let largest = Revision::try_from((1_u64 << 63) - 1).expect("it is the largest revision");
 
     let _ = stored_events_at(
-        "/account/1",
+        &Subject::new("/account/1"),
         largest,
         DateTime::UNIX_EPOCH,
         [opened("golo"), opened("jane")],
@@ -281,7 +289,7 @@ fn numbers_from_the_given_id_and_times_a_minute_apart() {
     let noon: DateTime<Utc> = "2026-03-02T12:00:00Z".parse().expect("a time");
 
     let stored = stored_events_at(
-        "/account/1",
+        &Subject::new("/account/1"),
         7,
         noon,
         [opened("golo"), closed(), opened("jane")],
@@ -321,7 +329,10 @@ async fn drives_a_projection() {
 
     project(
         &owners,
-        &stored_events("/account/1", [opened("golo"), closed(), opened("jane")]),
+        &stored_events(
+            &Subject::new("/account/1"),
+            [opened("golo"), closed(), opened("jane")],
+        ),
     )
     .await
     .expect("the events are applied");
@@ -334,7 +345,7 @@ async fn reports_a_refusal() {
     let owners = Owners { view: owner_view() };
 
     // Data that does not match the event makes the projection refuse.
-    let mut refused = StoredEvent::new("/account/1", 0, &opened("golo"));
+    let mut refused = StoredEvent::new(Subject::new("/account/1"), 0, &opened("golo"));
     refused.data = json!({ "owner": 42 });
 
     let failure = project(&owners, &[refused])
@@ -354,7 +365,10 @@ async fn drives_a_typed_projection() {
 
     project(
         &owners,
-        &stored_events("/account/1", [opened("golo"), closed(), opened("jane")]),
+        &stored_events(
+            &Subject::new("/account/1"),
+            [opened("golo"), closed(), opened("jane")],
+        ),
     )
     .await
     .expect("the events are applied");
@@ -365,7 +379,7 @@ async fn drives_a_typed_projection() {
 #[tokio::test]
 async fn reports_data_a_typed_projection_can_not_read() {
     let owners = TypedOwners::new();
-    let mut broken = StoredEvent::new("/account/1", 0, &opened("golo"));
+    let mut broken = StoredEvent::new(Subject::new("/account/1"), 0, &opened("golo"));
     broken.data = json!("not an object");
 
     let failure = project(&owners, &[broken])
@@ -382,11 +396,11 @@ async fn takes_the_way_of_a_run() {
     // part by part, an event of a type the projection does not know is left
     // out, and the projection learns of every event.
     let owners = TypedOwners::new();
-    let mut invented = StoredEvent::new("/account/2", 1, &opened("john"));
+    let mut invented = StoredEvent::new(Subject::new("/account/2"), 1, &opened("john"));
     "test.account.invented".clone_into(&mut invented.event_type);
     let twice = StoredEvent {
         event_type: "test.account.opened-twice".to_owned(),
-        ..StoredEvent::new("/account/3", 2, &opened("ignored"))
+        ..StoredEvent::new(Subject::new("/account/3"), 2, &opened("ignored"))
     };
 
     project(&owners, &[invented, twice])
@@ -494,7 +508,10 @@ async fn applies_within_one_transaction() {
 
     project_transactional(
         &table,
-        &stored_events("/account/1", [opened("golo"), opened("jane")]),
+        &stored_events(
+            &Subject::new("/account/1"),
+            [opened("golo"), opened("jane")],
+        ),
     )
     .await
     .expect("the events are applied");
@@ -528,7 +545,7 @@ async fn rolls_back_on_a_refusal() {
 
     let failure = project_transactional(
         &table,
-        &stored_events("/account/1", [opened("golo"), closed()]),
+        &stored_events(&Subject::new("/account/1"), [opened("golo"), closed()]),
     )
     .await
     .expect_err("the closing is refused");
@@ -554,9 +571,12 @@ async fn reports_a_failing_begin() {
         ..OwnerTable::default()
     };
 
-    let failure = project_transactional(&table, &stored_events("/account/1", [opened("golo")]))
-        .await
-        .expect_err("the transaction can not be begun");
+    let failure = project_transactional(
+        &table,
+        &stored_events(&Subject::new("/account/1"), [opened("golo")]),
+    )
+    .await
+    .expect_err("the transaction can not be begun");
 
     assert_eq!(failure.to_string(), "no connection");
     assert_eq!(table.log.entries(), Vec::<String>::new());
@@ -572,9 +592,12 @@ async fn reports_a_failing_commit() {
         ..OwnerTable::default()
     };
 
-    let failure = project_transactional(&table, &stored_events("/account/1", [opened("golo")]))
-        .await
-        .expect_err("the transaction can not be committed");
+    let failure = project_transactional(
+        &table,
+        &stored_events(&Subject::new("/account/1"), [opened("golo")]),
+    )
+    .await
+    .expect_err("the transaction can not be committed");
 
     assert_eq!(failure.to_string(), "disk full");
 }
@@ -643,7 +666,10 @@ async fn drives_a_typed_transaction() {
 
     project_transactional(
         &table,
-        &stored_events("/account/1", [opened("golo"), closed(), opened("jane")]),
+        &stored_events(
+            &Subject::new("/account/1"),
+            [opened("golo"), closed(), opened("jane")],
+        ),
     )
     .await
     .expect("the events are applied");

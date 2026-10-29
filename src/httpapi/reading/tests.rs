@@ -28,7 +28,7 @@ use tower::ServiceExt;
 
 use super::{QueryAnswer, REVISION, Reading, WAIT_FOR_REVISION};
 use crate::{
-    Envelope, InMemoryView, KeyedView, Revision, Revisioned, Transient, View,
+    Envelope, InMemoryView, KeyedView, Revision, Revisioned, Subject, Transient, View,
     httpapi::{HttpError, Strict, query},
 };
 
@@ -43,7 +43,7 @@ fn event(id: Revision) -> Envelope<()> {
         id,
         time: DateTime::UNIX_EPOCH,
         source: "https://thenativeweb.io".to_owned(),
-        subject: "/books".to_owned(),
+        subject: Subject::new("/books"),
         event_type: "io.thenativeweb.test.book-shelved".to_owned(),
         trace_parent: None,
         trace_state: None,

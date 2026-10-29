@@ -36,7 +36,7 @@ mod tests;
 /// # }
 /// # #[derive(Clone)] struct BorrowBook;
 /// # impl architecturekit::Command for BorrowBook {
-/// #     fn subject(&self) -> String { "/books/42".to_owned() }
+/// #     fn subject(&self) -> architecturekit::Subject { architecturekit::Subject::new("/books/42") }
 /// #     fn preconditions(&self) -> Vec<architecturekit::Precondition> { Vec::new() }
 /// # }
 /// # #[derive(Clone, Default)] struct Book;

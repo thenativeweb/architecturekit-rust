@@ -3,8 +3,8 @@ use std::{error::Error, fmt, future::Future};
 use chrono::{DateTime, Utc};
 
 use crate::{
-    Categorized, Category, Events, Failure, Permanent, Revision, Transient, UpcastEvent, Upcasters,
-    revision::id_of,
+    Categorized, Category, Events, Failure, Permanent, Revision, Subject, Transient, UpcastEvent,
+    Upcasters, revision::id_of, subject::subject_of,
 };
 
 mod run;
@@ -38,7 +38,7 @@ pub struct Envelope<E> {
     /// The source of the event.
     pub source: String,
     /// The subject of the event.
-    pub subject: String,
+    pub subject: Subject,
     /// The type of the event, after the upcasters have run.
     pub event_type: String,
     /// The `traceparent` of the event, if it has one.
@@ -70,11 +70,11 @@ impl<E: Events> Envelope<E> {
     /// # struct BookAcquired { title: String }
     /// # #[derive(Events)]
     /// # enum BookEvent { Acquired(BookAcquired) }
-    /// use architecturekit::{Envelope, InMemoryView};
+    /// use architecturekit::{Envelope, InMemoryView, Subject};
     ///
     /// let titles = InMemoryView::new(String::clone);
     /// let envelope = Envelope::new(
-    ///     "/books/42",
+    ///     Subject::new("/books/42"),
     ///     0,
     ///     BookEvent::Acquired(BookAcquired { title: "2001".to_owned() }),
     /// );
@@ -83,12 +83,12 @@ impl<E: Events> Envelope<E> {
     /// # Ok::<(), architecturekit::ViewError>(())
     /// ```
     #[must_use]
-    pub fn new(subject: &str, id: impl Into<Revision>, data: E) -> Self {
+    pub fn new(subject: Subject, id: impl Into<Revision>, data: E) -> Self {
         Self {
             id: id.into(),
             time: DateTime::UNIX_EPOCH,
             source: MADE_UP_SOURCE.to_owned(),
-            subject: subject.to_owned(),
+            subject,
             event_type: data.event_type().to_owned(),
             trace_parent: None,
             trace_state: None,
@@ -117,9 +117,9 @@ pub trait Projected: sealed::Sealed + Sized + Send + 'static {
     ///
     /// # Errors
     ///
-    /// Fails permanently if the ID of the event is not a revision, which the
-    /// database never writes, if an upcaster fails, or if the data of an event
-    /// does not match its type.
+    /// Fails permanently if the ID of the event is not a revision, or its
+    /// subject not a subject, neither of which the database ever writes, if an
+    /// upcaster fails, or if the data of an event does not match its type.
     #[doc(hidden)]
     fn project(
         stored: &eventsourcingdb::Event,
@@ -144,7 +144,7 @@ impl<E: Events + Send + 'static> Projected for E {
                 event.id(),
                 *event.time(),
                 event.source().to_owned(),
-                event.subject().to_owned(),
+                event.subject().clone(),
                 event.event_type().to_owned(),
             );
             let data = match E::from_data(&event_type, event.into_data()) {
@@ -184,7 +184,7 @@ impl Projected for eventsourcingdb::Event {
             id: id_of(stored)?,
             time: *stored.time(),
             source: stored.source().to_owned(),
-            subject: stored.subject().to_owned(),
+            subject: subject_of(stored)?,
             event_type: stored.ty().to_owned(),
             trace_parent: stored.traceparent().map(ToOwned::to_owned),
             trace_state: stored.tracestate().map(ToOwned::to_owned),
@@ -404,8 +404,8 @@ pub enum ProjectionError {
     /// Reading the events failed, and trying again later may succeed.
     Transient(Transient),
     /// Reading the events failed, an event failed its verification, could not
-    /// be decoded, or has an ID that is not a revision, or an upcaster failed,
-    /// and trying again will not help.
+    /// be decoded, or has an ID that is not a revision or a subject that is not
+    /// one, or an upcaster failed, and trying again will not help.
     Permanent(Permanent),
     /// The projection panicked, with the given message. It is permanent, since
     /// it would panic again, also together with a failure that may pass.

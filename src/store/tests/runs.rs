@@ -26,7 +26,7 @@ use super::{
 use crate::{
     CancellationToken, Categorized, Category, CaughtUpError, Envelope, EventOn, Phase,
     Precondition, Projection, ProjectionError, ProjectionOptions, ProjectionRun, Reconnect,
-    ResumableProjection, Revision, Store, StoreBuilder, Subjects, Transaction,
+    ResumableProjection, Revision, Store, StoreBuilder, Subject, Subjects, Transaction,
     TransactionalProjection, wait_caught_up,
 };
 
@@ -227,11 +227,11 @@ fn named(name: &str) -> ProjectionOptions {
     ProjectionOptions::named(name)
 }
 
-async fn increment(store: &Store, subject: &str, count: usize) -> Vec<Revision> {
+async fn increment(store: &Store, subject: &Subject, count: usize) -> Vec<Revision> {
     store
         .write(
             (0..count)
-                .map(|_| EventOn::new(subject, &Incremented { by: 1 }))
+                .map(|_| EventOn::new(subject.clone(), &Incremented { by: 1 }))
                 .collect(),
             vec![Precondition::unconditionally()],
         )
@@ -254,7 +254,7 @@ async fn follows_the_events_once_it_has_caught_up_and_stops_with_its_token() {
     let token = CancellationToken::new();
 
     let run = store.start_projection(
-        Subjects::exact(&subject),
+        Subjects::exact(subject.clone()),
         Arc::clone(&projection),
         token.clone(),
         named("books"),
@@ -292,7 +292,7 @@ async fn resumes_from_its_checkpoint_and_saves_it_after_every_live_event() {
     let token = CancellationToken::new();
 
     let run = store.start_resumable_projection(
-        Subjects::exact(&subject),
+        Subjects::exact(subject.clone()),
         Arc::clone(&projection),
         token.clone(),
         ProjectionOptions::default(),
@@ -323,7 +323,7 @@ async fn commits_a_transactional_projection_in_batches_and_then_every_event() {
     let token = CancellationToken::new();
 
     let run = store.start_transactional_projection(
-        Subjects::exact(&subject),
+        Subjects::exact(subject.clone()),
         Arc::clone(&ledger),
         token.clone(),
         ProjectionOptions::default(),
@@ -378,7 +378,7 @@ async fn reports_a_disruption_keeps_its_beginning_and_is_live_again() {
     let token = CancellationToken::new();
 
     let run = store.start_projection(
-        Subjects::exact("/test"),
+        Subjects::exact(Subject::new("/test")),
         Arc::new(Applied::default()),
         token.clone(),
         ProjectionOptions::default(),
@@ -413,7 +413,7 @@ async fn reconnects_of(fake: Fake, max_delay: Duration, count: usize) -> Vec<(Du
     let token = CancellationToken::new();
 
     let run = store.start_projection(
-        Subjects::exact("/test"),
+        Subjects::exact(Subject::new("/test")),
         Arc::new(Applied::default()),
         token.clone(),
         ProjectionOptions::default(),
@@ -503,7 +503,7 @@ async fn reads_again_from_an_unreachable_database() {
     let token = CancellationToken::new();
 
     let run = store.start_projection(
-        Subjects::exact("/test"),
+        Subjects::exact(Subject::new("/test")),
         Arc::new(Applied::default()),
         token.clone(),
         named("books"),
@@ -535,13 +535,13 @@ async fn tells_the_observer_which_projection_reads_again_and_why() {
     let token = CancellationToken::new();
 
     let named_run = store.start_projection(
-        Subjects::tree("/books"),
+        Subjects::tree(Subject::new("/books")),
         Arc::new(Applied::default()),
         token.clone(),
         named("books"),
     );
     let unnamed_run = store.start_projection(
-        Subjects::exact("/readers"),
+        Subjects::exact(Subject::new("/readers")),
         Arc::new(Applied::default()),
         token.clone(),
         ProjectionOptions::default(),
@@ -566,7 +566,7 @@ async fn tells_the_observer_which_projection_reads_again_and_why() {
         .find(|reconnect| reconnect.projection.is_some())
         .expect("the named projection reconnects");
     assert_eq!(named_one.projection.as_deref(), Some("books"));
-    assert_eq!(named_one.subject, "/books");
+    assert_eq!(named_one.subject, Subject::new("/books"));
     assert_eq!(named_one.delay, DELAY);
     assert_eq!(named_one.attempt, 1);
     assert_eq!(named_one.error.category(), Some(Category::Transient));
@@ -575,7 +575,8 @@ async fn tells_the_observer_which_projection_reads_again_and_why() {
         .find(|reconnect| reconnect.projection.is_none())
         .expect("the unnamed projection reconnects");
     assert_eq!(
-        unnamed_one.subject, "/readers",
+        unnamed_one.subject,
+        Subject::new("/readers"),
         "a projection without a name is reported by its subject"
     );
 }
@@ -592,7 +593,7 @@ async fn ends_when_the_database_rejects_the_api_token() {
     let (store, reconnects) = observed(client, DELAY);
 
     let run = store.start_projection(
-        Subjects::exact("/test"),
+        Subjects::exact(Subject::new("/test")),
         Arc::new(Applied::default()),
         CancellationToken::new(),
         ProjectionOptions::default(),
@@ -617,7 +618,7 @@ async fn ends_on_a_failure_of_the_projection_that_trying_again_will_not_fix() {
     let _ = increment(&store, &subject, 1).await;
 
     let run = store.start_projection(
-        Subjects::exact(&subject),
+        Subjects::exact(subject.clone()),
         Arc::new(Applied {
             trouble: Trouble::RefusesPermanently,
             ..Applied::default()
@@ -661,7 +662,7 @@ async fn reads_again_after_a_transient_failure_of_the_projection() {
     let token = CancellationToken::new();
 
     let run = store.start_projection(
-        Subjects::exact(&subject),
+        Subjects::exact(subject.clone()),
         Arc::clone(&projection),
         token.clone(),
         ProjectionOptions::default(),
@@ -682,7 +683,7 @@ async fn ends_the_run_rather_than_the_task_when_the_projection_panics() {
     let _ = increment(&store, &subject, 1).await;
 
     let run = store.start_projection(
-        Subjects::exact(&subject),
+        Subjects::exact(subject.clone()),
         Arc::new(Applied {
             trouble: Trouble::Panics,
             ..Applied::default()
@@ -707,7 +708,7 @@ async fn ends_the_run_when_the_observer_of_reconnects_panics() {
         .build();
 
     let run = store.start_projection(
-        Subjects::exact("/test"),
+        Subjects::exact(Subject::new("/test")),
         Arc::new(Applied::default()),
         CancellationToken::new(),
         ProjectionOptions::default(),
@@ -774,13 +775,13 @@ async fn returns_once_every_run_has_caught_up_also_if_it_has_ended_since() {
     let token = CancellationToken::new();
 
     let first = store.start_projection(
-        Subjects::exact(&subject),
+        Subjects::exact(subject.clone()),
         Arc::new(Applied::default()),
         token.clone(),
         named("first"),
     );
     let second = store.start_projection(
-        Subjects::tree("/"),
+        Subjects::tree(Subject::new("/")),
         Arc::new(Applied::default()),
         token.clone(),
         named("second"),
@@ -816,7 +817,7 @@ async fn refused_run(
     let (store, _) = observed(client, DELAY);
     let token = CancellationToken::new();
     let run = store.start_projection(
-        Subjects::exact("/test"),
+        Subjects::exact(Subject::new("/test")),
         Arc::new(Applied::default()),
         token.clone(),
         options,
@@ -835,7 +836,7 @@ async fn stalled_run(options: ProjectionOptions) -> (ProjectionRun, Cancellation
     let (store, _) = observed(client, DELAY);
     let token = CancellationToken::new();
     let run = store.start_projection(
-        Subjects::exact("/test"),
+        Subjects::exact(Subject::new("/test")),
         Arc::new(Applied::default()),
         token.clone(),
         options,

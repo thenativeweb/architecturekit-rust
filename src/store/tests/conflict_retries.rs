@@ -30,7 +30,7 @@ use super::{
 };
 use crate::{
     Decider, DomainError, EventOn, ExecuteError, Failure, Permanent, Precondition, Revision, Store,
-    Transient, WriteError,
+    Subject, Transient, WriteError,
     command::{resolve_preconditions, violated_precondition},
 };
 
@@ -277,7 +277,7 @@ async fn decides_again_through_either_api_if_on_state_read_did_not_hold_among_pr
     let database = Database::start().await;
     let store = retrying(&database, 2).await;
     let subject = subject_for("retries-several");
-    let other = format!("{subject}/other");
+    let other = Subject::new(&format!("{subject}/other"));
 
     let _ = store
         .execute(&counter_decider(), Increment::new(&subject, 1))
@@ -387,7 +387,7 @@ async fn decides_again_only_if_the_database_names_on_state_read_or_no_preconditi
                 Increment::new("/test", 1).declaring(|| {
                     vec![
                         Precondition::on_state_read(),
-                        Precondition::on_event_id("/test", Revision::from(0)),
+                        Precondition::on_event_id(Subject::new("/test"), Revision::from(0)),
                         Precondition::require(
                             eventsourcingdb::Precondition::is_eventql_query_true(
                                 "FROM e IN events PROJECT INTO COUNT() == 0",
@@ -449,10 +449,14 @@ fn json_of(precondition: &eventsourcingdb::Precondition) -> Value {
 }
 
 fn resolved(subject: &str, declared: Vec<Precondition>, last_event_id: Option<u32>) -> Vec<Value> {
-    resolve_preconditions(subject, declared, last_event_id.map(Revision::from))
-        .iter()
-        .map(json_of)
-        .collect()
+    resolve_preconditions(
+        &Subject::new(subject),
+        declared,
+        last_event_id.map(Revision::from),
+    )
+    .iter()
+    .map(json_of)
+    .collect()
 }
 
 /// The preconditions of a command on /books/42 that checks several subjects,
@@ -461,10 +465,10 @@ fn resolved(subject: &str, declared: Vec<Precondition>, last_event_id: Option<u3
 /// both of `on_event_id`.
 fn several_of_a_kind() -> Vec<Precondition> {
     vec![
-        Precondition::on_event_id("/books/23", Revision::from(3)),
+        Precondition::on_event_id(Subject::new("/books/23"), Revision::from(3)),
         Precondition::on_state_read(),
-        Precondition::on_event_id("/books/42", Revision::from(5)),
-        Precondition::on_pristine_subject("/books/7"),
+        Precondition::on_event_id(Subject::new("/books/42"), Revision::from(5)),
+        Precondition::on_pristine_subject(Subject::new("/books/7")),
         Precondition::require(eventsourcingdb::Precondition::is_eventql_query_true(
             "FROM e IN events PROJECT INTO COUNT() == 0",
         )),
@@ -519,7 +523,7 @@ fn resolves_on_event_id_into_the_revision_check_of_the_database() {
         resolved(
             "/books/42",
             vec![
-                Precondition::on_event_id("/books/23", Revision::from(5)),
+                Precondition::on_event_id(Subject::new("/books/23"), Revision::from(5)),
                 Precondition::on_state_read(),
             ],
             Some(7),
@@ -593,7 +597,10 @@ async fn failure_of_write(client: eventsourcingdb::Client) -> Failure {
     let refusal = Store::builder(client, SOURCE)
         .build()
         .write(
-            vec![EventOn::new("/books/42", &Incremented { by: 1 })],
+            vec![EventOn::new(
+                Subject::new("/books/42"),
+                &Incremented { by: 1 },
+            )],
             vec![Precondition::unconditionally()],
         )
         .await

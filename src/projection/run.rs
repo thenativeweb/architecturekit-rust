@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use futures_util::future;
 use tokio::sync::watch;
 
-use crate::{Categorized, Category, ProjectionError, Revision};
+use crate::{Categorized, Category, ProjectionError, Revision, Subject};
 
 /// How a projection is started. Build it with [`named`](ProjectionOptions::named)
 /// or [`default`](Default::default), which leaves the projection without a
@@ -364,7 +364,7 @@ pub struct Reconnect {
     /// [`subject`](Reconnect::subject) tells it apart.
     pub projection: Option<String>,
     /// The subject the projection reads.
-    pub subject: String,
+    pub subject: Subject,
     /// Why the projection reads again, such as a stream that broke off, which
     /// is what a stream that ended is, since the database never ends one on
     /// its own.

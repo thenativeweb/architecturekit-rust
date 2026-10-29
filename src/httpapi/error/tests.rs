@@ -18,8 +18,8 @@ use log::Level;
 use super::HttpError;
 use crate::{
     Categorized, Category, DomainError, ExecuteError, Failure, LoadError, LowerBound, NotCaughtUp,
-    Permanent, ReadOptions, Revision, Transient, UpperBound, check_read_options,
-    httpapi::logs::captured,
+    Permanent, ReadOptions, Revision, Subject, SubjectScheme, Transient, UpperBound,
+    check_read_options, httpapi::logs::captured,
 };
 
 /// An error of a category the test names, as an application has one.
@@ -73,6 +73,20 @@ fn not_a_revision() -> HttpError {
     "abc"
         .parse::<Revision>()
         .expect_err("abc is no revision")
+        .into()
+}
+
+fn not_a_subject() -> HttpError {
+    "books/42"
+        .parse::<Subject>()
+        .expect_err("books/42 is no subject")
+        .into()
+}
+
+fn not_values_of_a_subject() -> HttpError {
+    SubjectScheme::new("/books/{book_id}")
+        .try_build(&["a.b"])
+        .expect_err("a.b can not be part of a subject")
         .into()
 }
 
@@ -142,6 +156,16 @@ fn every_kind() -> Vec<(&'static str, HttpError, StatusCode)> {
         (
             "a value that is not a revision",
             not_a_revision(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "a value that is not a subject",
+            not_a_subject(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "values that can not compose a subject",
+            not_values_of_a_subject(),
             StatusCode::BAD_REQUEST,
         ),
         ("an empty range", empty_range(), StatusCode::BAD_REQUEST),
@@ -221,6 +245,28 @@ fn maps_a_value_that_is_not_a_revision_to_400_with_its_own_text() {
 }
 
 #[test]
+fn maps_a_value_that_is_not_a_subject_to_400_with_its_own_text() {
+    let error = not_a_subject();
+
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        error.message(),
+        r#"not a subject: "books/42", which does not start with a slash"#
+    );
+}
+
+#[test]
+fn maps_values_that_can_not_compose_a_subject_to_400_with_their_own_text() {
+    let error = not_values_of_a_subject();
+
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        error.message(),
+        r#"value "a.b" for "book_id" may only contain A-Z, a-z, 0-9, underscores, and hyphens"#
+    );
+}
+
+#[test]
 fn maps_an_empty_range_to_400() {
     assert_eq!(empty_range().status(), StatusCode::BAD_REQUEST);
 }
@@ -288,6 +334,16 @@ fn explains_a_failure_the_caller_can_fix_with_its_own_text_without_logging_it() 
             "a value that is not a revision",
             not_a_revision(),
             r#"not a revision: "abc""#,
+        ),
+        (
+            "a value that is not a subject",
+            not_a_subject(),
+            r#"not a subject: "books/42", which does not start with a slash"#,
+        ),
+        (
+            "values that can not compose a subject",
+            not_values_of_a_subject(),
+            r#"value "a.b" for "book_id" may only contain A-Z, a-z, 0-9, underscores, and hyphens"#,
         ),
         (
             "an empty range",

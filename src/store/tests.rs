@@ -2,7 +2,7 @@
 // failures of the database through load and write, write, register_schemas,
 // the verification of signatures, from_latest and ignored events with a
 // database, and that a subject scheme agrees with the database on every
-// character. The tests of execute, its conflicts and its retries, of failed
+// character, as Subject does on what a subject is. The tests of execute, its conflicts and its retries, of failed
 // writes, which write and execute share, and of the state cache are in the
 // modules execute, conflict_retries, failed_writes and state_cache.
 //
@@ -30,9 +30,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Categorized, Category, Event, EventOn, Events, LoadError, Permanent, Precondition,
-    RegisterSchemasError, Revision, State, Store, SubjectScheme, Transient, WriteError,
+    RegisterSchemasError, Revision, State, Store, Subject, SubjectScheme, Transient, WriteError,
 };
 
+use commands::candidate;
 use database::{Database, subject_for};
 use fake::{Api, Reply, refusing};
 
@@ -125,8 +126,8 @@ async fn loads_the_state_of_a_subject_from_its_events() {
     write_unconditionally(
         &store,
         vec![
-            EventOn::new(&subject, &Incremented { by: 3 }),
-            EventOn::new(&subject, &Incremented { by: 4 }),
+            EventOn::new(subject.clone(), &Incremented { by: 3 }),
+            EventOn::new(subject.clone(), &Incremented { by: 4 }),
         ],
     )
     .await;
@@ -157,9 +158,9 @@ async fn loads_a_subject_with_an_ignored_event() {
     write_unconditionally(
         &store,
         vec![
-            EventOn::new(&subject, &Incremented { by: 3 }),
+            EventOn::new(subject.clone(), &Incremented { by: 3 }),
             EventOn::new(
-                &subject,
+                subject.clone(),
                 &Annotated {
                     note: "a remark".to_owned(),
                 },
@@ -178,7 +179,7 @@ async fn fails_permanently_on_an_event_the_state_has_no_rule_for() {
     let store = database.store().await;
     let subject = subject_for("no-rule");
 
-    write_unconditionally(&store, vec![EventOn::new(&subject, &Unrelated {})]).await;
+    write_unconditionally(&store, vec![EventOn::new(subject.clone(), &Unrelated {})]).await;
 
     let failure = store
         .load::<Counter>(&subject)
@@ -202,11 +203,11 @@ async fn reads_from_the_latest_event_of_that_type() {
     write_unconditionally(
         &store,
         vec![
-            EventOn::new(&subject, &Unrelated {}),
-            EventOn::new(&subject, &Reset {}),
-            EventOn::new(&subject, &Incremented { by: 2 }),
-            EventOn::new(&subject, &Reset {}),
-            EventOn::new(&subject, &Incremented { by: 5 }),
+            EventOn::new(subject.clone(), &Unrelated {}),
+            EventOn::new(subject.clone(), &Reset {}),
+            EventOn::new(subject.clone(), &Incremented { by: 2 }),
+            EventOn::new(subject.clone(), &Reset {}),
+            EventOn::new(subject.clone(), &Incremented { by: 5 }),
         ],
     )
     .await;
@@ -227,8 +228,8 @@ async fn reads_everything_if_the_type_is_missing() {
     write_unconditionally(
         &store,
         vec![
-            EventOn::new(&subject, &Incremented { by: 3 }),
-            EventOn::new(&subject, &Incremented { by: 4 }),
+            EventOn::new(subject.clone(), &Incremented { by: 3 }),
+            EventOn::new(subject.clone(), &Incremented { by: 4 }),
         ],
     )
     .await;
@@ -248,7 +249,11 @@ async fn verifies_the_signatures_of_the_events_it_reads() {
         .await;
     let subject = subject_for("signed");
 
-    write_unconditionally(&store, vec![EventOn::new(&subject, &Incremented { by: 1 })]).await;
+    write_unconditionally(
+        &store,
+        vec![EventOn::new(subject.clone(), &Incremented { by: 1 })],
+    )
+    .await;
 
     let counter: Counter = store.load(&subject).await.expect("the signatures match");
     assert_eq!(counter.total, 1);
@@ -263,7 +268,11 @@ async fn refuses_an_event_whose_signature_does_not_match_the_key() {
         .await;
     let subject = subject_for("signed-otherwise");
 
-    write_unconditionally(&store, vec![EventOn::new(&subject, &Incremented { by: 1 })]).await;
+    write_unconditionally(
+        &store,
+        vec![EventOn::new(subject.clone(), &Incremented { by: 1 })],
+    )
+    .await;
 
     let failure = store
         .load::<Counter>(&subject)
@@ -301,10 +310,10 @@ async fn writes_events_to_several_subjects_at_once() {
     let written = store
         .write(
             vec![
-                EventOn::new(&first, &Incremented { by: 1 }),
-                EventOn::new(&second, &Incremented { by: 2 }),
+                EventOn::new(first.clone(), &Incremented { by: 1 }),
+                EventOn::new(second.clone(), &Incremented { by: 2 }),
             ],
-            vec![Precondition::on_pristine_subject(&first)],
+            vec![Precondition::on_pristine_subject(first.clone())],
         )
         .await
         .expect("the events are written");
@@ -324,12 +333,16 @@ async fn reports_a_precondition_that_did_not_hold_as_a_conflict_and_writes_nothi
     let store = database.store().await;
     let subject = subject_for("conflict");
 
-    write_unconditionally(&store, vec![EventOn::new(&subject, &Incremented { by: 1 })]).await;
+    write_unconditionally(
+        &store,
+        vec![EventOn::new(subject.clone(), &Incremented { by: 1 })],
+    )
+    .await;
 
     let failure = store
         .write(
-            vec![EventOn::new(&subject, &Incremented { by: 2 })],
-            vec![Precondition::on_pristine_subject(&subject)],
+            vec![EventOn::new(subject.clone(), &Incremented { by: 2 })],
+            vec![Precondition::on_pristine_subject(subject.clone())],
         )
         .await
         .expect_err("the subject is not pristine");
@@ -365,14 +378,14 @@ async fn refuses_the_preconditions_of_a_write_before_writing() {
             "unconditionally with another one",
             vec![
                 Precondition::unconditionally(),
-                Precondition::on_pristine_subject(&subject),
+                Precondition::on_pristine_subject(subject.clone()),
             ],
             "a write combines Precondition::unconditionally with other preconditions",
         ),
     ] {
         let failure = store
             .write(
-                vec![EventOn::new(&subject, &Incremented { by: 1 })],
+                vec![EventOn::new(subject.clone(), &Incremented { by: 1 })],
                 preconditions,
             )
             .await
@@ -410,25 +423,6 @@ async fn writes_nothing_for_no_events_but_checks_the_preconditions_first() {
     assert!(matches!(failure, WriteError::Permanent(_)), "{failure:?}");
 }
 
-#[tokio::test]
-async fn refuses_an_event_without_a_subject() {
-    let failure = Database::start()
-        .await
-        .store()
-        .await
-        .write(
-            vec![EventOn::new("", &Incremented { by: 1 })],
-            vec![Precondition::unconditionally()],
-        )
-        .await
-        .expect_err("an event needs a subject");
-
-    assert_eq!(
-        failure.to_string(),
-        "permanent failure: event 0 of a write needs a subject",
-    );
-}
-
 #[derive(Serialize, Deserialize, Event)]
 #[event(type = "io.thenativeweb.test.keyed")]
 struct Keyed {
@@ -452,7 +446,7 @@ async fn refuses_an_event_whose_data_can_not_be_encoded_without_writing() {
     let failure = store
         .write(
             vec![EventOn::new(
-                &subject,
+                subject.clone(),
                 &Keyed {
                     by_position: Some(HashMap::from([((1, 2), "x".to_owned())])),
                 },
@@ -504,15 +498,9 @@ async fn agrees_with_the_database_on_every_character() {
             continue;
         }
 
-        // One write each, since the database refuses a write as a whole.
-        let failure = store
-            .write(
-                vec![EventOn::new(
-                    format!("{base}/{value}"),
-                    &Incremented { by: 1 },
-                )],
-                vec![Precondition::unconditionally()],
-            )
+        // One write each, since the database refuses a write as a whole. The
+        // kit can not even name such a subject, so it goes past the kit.
+        let failure = write_past_the_kit(&database, &format!("{base}/{value}"))
             .await
             .expect_err("the database refuses what check refuses");
         assert_malformed_subject(&failure, &value);
@@ -537,18 +525,70 @@ async fn agrees_with_the_database_on_every_character() {
     }
 }
 
+#[tokio::test]
+async fn agrees_with_the_database_on_what_a_subject_is() {
+    let database = Database::start().await;
+    let base = subject_for("subjects");
+
+    for (name, subject) in [
+        ("the root", "/".to_owned()),
+        ("a segment", format!("{base}/a")),
+        ("segments", format!("{base}/a/b")),
+        ("a slash at the end", format!("{base}/a/")),
+        ("a slash at the end of segments", format!("{base}/a/b/")),
+        ("an empty segment", format!("{base}/a//b")),
+        ("two slashes at the end", format!("{base}/a/b//")),
+        ("two slashes alone", "//".to_owned()),
+        ("no slash at the start", "a/b".to_owned()),
+        ("nothing", String::new()),
+        (
+            "a character the database does not allow",
+            format!("{base}/a.b"),
+        ),
+    ] {
+        let written = write_past_the_kit(&database, &subject).await;
+
+        match (subject.parse::<Subject>(), written) {
+            (Ok(parsed), Ok(written)) => assert_eq!(
+                written[0].subject(),
+                parsed.as_str(),
+                "{name}: the database stores the subject as the kit reads it"
+            ),
+            (Err(_), Err(failure)) => assert_malformed_subject(&failure, &subject),
+            (parsed, written) => panic!(
+                "{name}: the kit reads {subject:?} as {parsed:?}, but the database answers {written:?}"
+            ),
+        }
+    }
+}
+
+/// Writes an event to the subject past the kit, which may be no subject at
+/// all, and returns what the database answers.
+async fn write_past_the_kit(
+    database: &Database,
+    subject: &str,
+) -> Result<Vec<eventsourcingdb::Event>, ClientError> {
+    database
+        .client()
+        .await
+        .write_events(
+            vec![candidate(
+                subject,
+                Incremented::EVENT_TYPE,
+                serde_json::json!({ "by": 1 }),
+            )],
+            Vec::new(),
+        )
+        .await
+}
+
 /// Asserts that the database refused a write for the given subject as
 /// malformed: with the code subject-malformed, or, from a database that offers
 /// just the v1 API, which reports it without a code, with a description that
 /// says so.
-fn assert_malformed_subject(failure: &WriteError, value: &str) {
-    assert!(
-        matches!(failure, WriteError::Permanent(_)),
-        "{value:?}: {failure:?}"
-    );
-
-    let Some(ClientError::DbApiError(answer)) = cause_of(failure) else {
-        panic!("{value:?}: the cause has to be the answer of the database, got {failure:?}");
+fn assert_malformed_subject(failure: &ClientError, value: &str) {
+    let ClientError::DbApiError(answer) = failure else {
+        panic!("{value:?}: the failure has to be the answer of the database, got {failure:?}");
     };
     if answer.code.is_empty() {
         assert!(
@@ -674,7 +714,7 @@ async fn load_from(reply: Reply) -> LoadError {
     )
     .build();
     store
-        .load::<Counter>("/test")
+        .load::<Counter>(&Subject::new("/test"))
         .await
         .expect_err("the fake refuses")
 }
@@ -683,8 +723,8 @@ async fn write_to(api: Api, path: &'static str, reply: Reply) -> WriteError {
     let store = Store::builder(refusing(api, path, reply).await, "https://thenativeweb.io").build();
     store
         .write(
-            vec![EventOn::new("/test", &Incremented { by: 1 })],
-            vec![Precondition::on_pristine_subject("/test")],
+            vec![EventOn::new(Subject::new("/test"), &Incremented { by: 1 })],
+            vec![Precondition::on_pristine_subject(Subject::new("/test"))],
         )
         .await
         .expect_err("the fake refuses")

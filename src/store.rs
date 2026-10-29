@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::Reconnect;
 use crate::{
     Command, Decider, Event, EventSchema, Events, Failure, Permanent, Precondition, ReadOptions,
-    Revision, State, Subjects, Transient, UpcastEvent,
+    Revision, State, Subject, Subjects, Transient, UpcastEvent,
     command::{
         checked_preconditions, resolve_preconditions, violated_precondition, write_preconditions,
     },
@@ -243,7 +243,7 @@ impl StoreBuilder {
 /// An event together with the subject it is written to, for [`Store::write`].
 #[derive(Debug)]
 pub struct EventOn {
-    subject: String,
+    subject: Subject,
     event_type: &'static str,
     data: Result<Value, serde_json::Error>,
 }
@@ -252,9 +252,9 @@ impl EventOn {
     /// Puts an event on a subject. Its data is written as JSON right away, and
     /// data that can not be written makes [`Store::write`] fail permanently.
     #[must_use]
-    pub fn new<E: Event>(subject: impl Into<String>, event: &E) -> Self {
+    pub fn new<E: Event>(subject: Subject, event: &E) -> Self {
         Self {
-            subject: subject.into(),
+            subject,
             event_type: E::EVENT_TYPE,
             data: serde_json::to_value(event),
         }
@@ -291,14 +291,14 @@ impl Store {
     /// Fails transiently if the database can not be reached, and permanently
     /// if an event fails its verification, if the state has no rule for an
     /// event, if the data of an event does not match its type, if the ID of
-    /// an event is not a revision, which the database never writes, or if the
-    /// database refuses the request.
+    /// an event is not a revision or its subject not a subject, neither of
+    /// which the database ever writes, or if the database refuses the request.
     ///
     /// # Panics
     ///
     /// A state that starts from an event type it has no rule for is a
     /// programming error, so this panics (see [`State::from_latest`]).
-    pub async fn load<S: State>(&self, subject: &str) -> Result<S, LoadError> {
+    pub async fn load<S: State>(&self, subject: &Subject) -> Result<S, LoadError> {
         Ok(self.fold::<S>(subject).await?.0)
     }
 
@@ -309,9 +309,9 @@ impl Store {
     /// the events after the one that state was built from.
     pub(crate) async fn fold<S: State>(
         &self,
-        subject: &str,
+        subject: &Subject,
     ) -> Result<(S, Option<Revision>), LoadError> {
-        let doing = format!("reading {subject:?}");
+        let doing = format!("reading {:?}", subject.as_str());
         let from_latest = from_latest_of::<S>();
         let cached = self
             .state_cache
@@ -334,7 +334,7 @@ impl Store {
             None => ReadEventsOptions {
                 from_latest_event: from_latest.map(|event_type| ReadFromLatestEventOptions {
                     if_event_is_missing: ReadEventMissingStrategy::ReadEverything,
-                    subject,
+                    subject: subject.as_str(),
                     ty: event_type,
                 }),
                 ..ReadEventsOptions::default()
@@ -343,7 +343,7 @@ impl Store {
 
         let events = self
             .client
-            .read_events(subject, Some(options))
+            .read_events(subject.as_str(), Some(options))
             .await
             .map_err(|error| LoadError::from(read_failure(error, &doing)))?;
         let mut events = pin!(events);
@@ -397,7 +397,7 @@ impl Store {
     ) -> Result<impl Stream<Item = Result<eventsourcingdb::Event, ReadError>> + 'a, ReadError> {
         check_read_options(options)?;
 
-        let doing = format!("reading {:?}", subjects.subject());
+        let doing = format!("reading {:?}", subjects.subject().as_str());
         let (opened, is_opened) = oneshot::channel();
         let (sender, receiver) = mpsc::channel(1);
 
@@ -409,7 +409,7 @@ impl Store {
             let requested = self
                 .client
                 .read_events(
-                    subjects.subject(),
+                    subjects.subject().as_str(),
                     Some(database_options(subjects, options, &bounds)),
                 )
                 .await;
@@ -578,7 +578,7 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()?;
 
         let preconditions = resolve_preconditions(&subject, declared, last_event_id);
-        let doing = format!("writing {subject:?}");
+        let doing = format!("writing {:?}", subject.as_str());
 
         Ok(self
             .write_candidates(candidates, preconditions, doing)
@@ -626,30 +626,15 @@ impl Store {
         let doing = format!(
             "writing {} events, the first to {:?}",
             events.len(),
-            first.subject
+            first.subject.as_str()
         );
         let candidates = events
             .into_iter()
-            .enumerate()
-            .map(|(index, event)| self.candidate_for(index, event))
+            .map(|event| self.candidate(event.subject, event.event_type, event.data))
             .collect::<Result<Vec<_>, _>>()?;
 
         self.write_candidates(candidates, preconditions, doing)
             .await
-    }
-
-    /// Turns an event into what the client writes, with the source of the
-    /// store. Data that can not be written fails permanently, naming the event
-    /// type, the subject and the reason.
-    fn candidate_for(&self, index: usize, event: EventOn) -> Result<EventCandidate, Permanent> {
-        if event.subject.is_empty() {
-            return Err(Permanent::Other(Failure::new(
-                format!("event {index} of a write needs a subject"),
-                None,
-            )));
-        }
-
-        self.candidate(event.subject, event.event_type, event.data)
     }
 
     /// Turns the encoded data of an event of the given type into what the
@@ -658,16 +643,16 @@ impl Store {
     /// subject and the reason. Execute and write both encode with it.
     fn candidate(
         &self,
-        subject: String,
+        subject: Subject,
         event_type: &str,
         data: Result<Value, serde_json::Error>,
     ) -> Result<EventCandidate, Permanent> {
-        let data = data.map_err(|cause| unencodable(event_type, &subject, cause))?;
+        let data = data.map_err(|cause| unencodable(event_type, subject.as_str(), cause))?;
 
         Ok(EventCandidate {
             data,
             source: self.source.clone(),
-            subject,
+            subject: subject.into(),
             ty: event_type.to_owned(),
             traceinfo: None,
         })

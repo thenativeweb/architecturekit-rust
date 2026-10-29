@@ -17,7 +17,9 @@ use futures_util::StreamExt;
 use serde_json::Value;
 
 use super::{Annotated, Counter, CounterEvent, Incremented, database::Database};
-use crate::{Command, Decider, DomainError, Event, EventOn, Precondition, Revision, Store};
+use crate::{
+    Command, Decider, DomainError, Event, EventOn, Precondition, Revision, Store, Subject,
+};
 
 pub(super) use super::database::SOURCE;
 
@@ -32,16 +34,18 @@ type Declaring = Arc<dyn Fn() -> Vec<Precondition> + Send + Sync>;
 /// command has to be, so it holds a function that makes them.
 #[derive(Clone)]
 pub(super) struct Increment {
-    pub(super) subject: String,
+    pub(super) subject: Subject,
     pub(super) by: i64,
     pub(super) limit: Option<i64>,
     declaring: Declaring,
 }
 
 impl Increment {
-    pub(super) fn new(subject: &str, by: i64) -> Self {
+    /// A command on the given subject, which is a [`Subject`], or a subject
+    /// that the test spells out.
+    pub(super) fn new(subject: &(impl AsRef<str> + ?Sized), by: i64) -> Self {
         Self {
-            subject: subject.to_owned(),
+            subject: Subject::new(subject.as_ref()),
             by,
             limit: None,
             declaring: Arc::new(|| vec![Precondition::unconditionally()]),
@@ -106,7 +110,7 @@ impl Increment {
 }
 
 impl Command for Increment {
-    fn subject(&self) -> String {
+    fn subject(&self) -> Subject {
         self.subject.clone()
     }
 
@@ -207,7 +211,7 @@ impl KitWrite {
     pub(super) async fn remark(
         self,
         store: &Store,
-        subject: &str,
+        subject: &Subject,
         note: &str,
         preconditions: impl Fn() -> Vec<Precondition> + Send + Sync + 'static,
     ) -> Result<Vec<eventsourcingdb::Event>, crate::Error<DomainError>> {
@@ -221,7 +225,7 @@ impl KitWrite {
             Self::Write => Ok(store
                 .write(
                     vec![EventOn::new(
-                        subject,
+                        subject.clone(),
                         &Annotated {
                             note: note.to_owned(),
                         },
@@ -234,7 +238,9 @@ impl KitWrite {
 
     /// Returns how the message of a failure names the write of a single event
     /// to the subject.
-    pub(super) fn doing(self, subject: &str) -> String {
+    pub(super) fn doing(self, subject: &Subject) -> String {
+        let subject = subject.as_str();
+
         match self {
             Self::Execute => format!("writing {subject:?}"),
             Self::Write => format!("writing 1 events, the first to {subject:?}"),
@@ -242,12 +248,16 @@ impl KitWrite {
     }
 }
 
-/// An event to write past the kit.
-pub(super) fn candidate(subject: &str, event_type: &str, data: Value) -> EventCandidate {
+/// An event to write past the kit, to a subject that need not be one.
+pub(super) fn candidate(
+    subject: &(impl AsRef<str> + ?Sized),
+    event_type: &str,
+    data: Value,
+) -> EventCandidate {
     EventCandidate {
         data,
         source: SOURCE.to_owned(),
-        subject: subject.to_owned(),
+        subject: subject.as_ref().to_owned(),
         ty: event_type.to_owned(),
         traceinfo: None,
     }
@@ -257,7 +267,7 @@ pub(super) fn candidate(subject: &str, event_type: &str, data: Value) -> EventCa
 /// somebody else would.
 pub(super) async fn write_past_the_kit(
     database: &Database,
-    subject: &str,
+    subject: &(impl AsRef<str> + ?Sized),
     event_type: &str,
     data: Value,
 ) {
@@ -270,7 +280,7 @@ pub(super) async fn write_past_the_kit(
 }
 
 /// Returns the total of the counter of the subject.
-pub(super) async fn total_in(store: &Store, subject: &str) -> i64 {
+pub(super) async fn total_in(store: &Store, subject: &Subject) -> i64 {
     store
         .load::<Counter>(subject)
         .await
@@ -280,10 +290,10 @@ pub(super) async fn total_in(store: &Store, subject: &str) -> i64 {
 
 /// Returns the types of the events of the subject, read straight from the
 /// database, past the kit.
-pub(super) async fn event_types_in(database: &Database, subject: &str) -> Vec<String> {
+pub(super) async fn event_types_in(database: &Database, subject: &Subject) -> Vec<String> {
     let client = database.client().await;
     let events = client
-        .read_events(subject, None)
+        .read_events(subject.as_str(), None)
         .await
         .expect("the subject can be read");
     let mut events = pin!(events);
