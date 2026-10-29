@@ -28,7 +28,7 @@ use tower::ServiceExt;
 
 use super::{QueryAnswer, REVISION, Reading, WAIT_FOR_REVISION};
 use crate::{
-    Envelope, InMemoryView, KeyedView, Revisioned, Transient, View,
+    Envelope, InMemoryView, KeyedView, Revision, Revisioned, Subject, Transient, View,
     httpapi::{HttpError, Strict, query},
 };
 
@@ -38,12 +38,12 @@ struct Book {
     shelf: String,
 }
 
-fn event(id: &str) -> Envelope<()> {
+fn event(id: Revision) -> Envelope<()> {
     Envelope {
-        id: id.to_owned(),
+        id,
         time: DateTime::UNIX_EPOCH,
         source: "https://thenativeweb.io".to_owned(),
-        subject: "/books".to_owned(),
+        subject: Subject::new("/books"),
         event_type: "io.thenativeweb.test.book-shelved".to_owned(),
         trace_parent: None,
         trace_state: None,
@@ -53,7 +53,8 @@ fn event(id: &str) -> Envelope<()> {
 }
 
 /// Shelves a book, and records the event as seen.
-fn shelve(books: &InMemoryView<String, Book>, event_id: &str, id: &str, shelf: &str) {
+fn shelve(books: &InMemoryView<String, Book>, event_id: u32, id: &str, shelf: &str) {
+    let event_id = Revision::from(event_id);
     let _ = books
         .insert(
             &event(event_id),
@@ -203,7 +204,7 @@ async fn revisioned_book_by_id(
 
 fn app_with(wait: Duration) -> App {
     let books = Arc::new(InMemoryView::new(|book: &Book| book.id.clone()));
-    shelve(&books, "1", "42", "A");
+    shelve(&books, 1, "42", "A");
 
     App {
         books,
@@ -334,7 +335,7 @@ async fn a_query_waits_for_the_revision_it_was_asked_for() {
 
     let shelving = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        shelve(&app.books, "2", "23", "A");
+        shelve(&app.books, 2, "23", "A");
     });
 
     let (status, headers, body) = send(
@@ -517,7 +518,7 @@ async fn a_new_revision_changes_the_tag() {
     let router = router(app.clone());
     let before = tag_of_shelf_a(&router).await;
 
-    shelve(&app.books, "2", "23", "B");
+    shelve(&app.books, 2, "23", "B");
     let (status, _, _) = send(
         &router,
         asking(
@@ -683,7 +684,7 @@ async fn awaiting_waits_for_the_revision_it_was_asked_for_and_tags_nothing() {
 
     let shelving = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        shelve(&app.books, "2", "23", "A");
+        shelve(&app.books, 2, "23", "A");
     });
 
     let (status, headers, body) = send(
@@ -714,14 +715,14 @@ struct Broken;
 impl Revisioned for Broken {
     type Error = Transient;
 
-    fn revision(&self) -> impl Future<Output = Result<Option<String>, Transient>> + Send {
+    fn revision(&self) -> impl Future<Output = Result<Option<Revision>, Transient>> + Send {
         future::ready(Err(Transient::Other(crate::Failure::new(
             "the connection broke",
             None,
         ))))
     }
 
-    fn wait_for(&self, _: &str) -> impl Future<Output = Result<(), Transient>> + Send {
+    fn wait_for(&self, _: Revision) -> impl Future<Output = Result<(), Transient>> + Send {
         future::ready(Err(Transient::Other(crate::Failure::new(
             "the connection broke",
             None,
@@ -791,7 +792,7 @@ impl Serialize for Unencodable {
 #[tokio::test]
 async fn a_query_that_can_not_be_encoded_goes_without_a_tag() {
     let books = InMemoryView::new(|book: &Book| book.id.clone());
-    shelve(&books, "1", "42", "A");
+    shelve(&books, 1, "42", "A");
 
     let answer = Reading::of(&parts_with(&[("if-none-match", "*")]))
         .revisioned(&books, &Unencodable, Duration::ZERO, || async {

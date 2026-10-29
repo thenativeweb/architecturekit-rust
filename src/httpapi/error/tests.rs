@@ -18,8 +18,8 @@ use log::Level;
 use super::HttpError;
 use crate::{
     Categorized, Category, DomainError, ExecuteError, Failure, LoadError, LowerBound, NotCaughtUp,
-    Permanent, ReadOptions, Transient, UpperBound, ViewError, check_read_options,
-    httpapi::logs::captured, parse_revision,
+    Permanent, ReadOptions, Revision, Subject, SubjectScheme, Transient, UpperBound,
+    check_read_options, httpapi::logs::captured,
 };
 
 /// An error of a category the test names, as an application has one.
@@ -61,8 +61,8 @@ fn outcome_unknown(cause: Option<Transient>) -> ExecuteError<DomainError> {
 
 fn empty_range() -> HttpError {
     check_read_options(&ReadOptions {
-        lower_bound: LowerBound::FromEvent("5".to_owned()),
-        upper_bound: UpperBound::BeforeEvent("3".to_owned()),
+        lower_bound: LowerBound::FromEvent(Revision::from(5)),
+        upper_bound: UpperBound::BeforeEvent(Revision::from(3)),
         ..ReadOptions::default()
     })
     .expect_err("the range is empty")
@@ -70,8 +70,23 @@ fn empty_range() -> HttpError {
 }
 
 fn not_a_revision() -> HttpError {
-    parse_revision("abc")
+    "abc"
+        .parse::<Revision>()
         .expect_err("abc is no revision")
+        .into()
+}
+
+fn not_a_subject() -> HttpError {
+    "books/42"
+        .parse::<Subject>()
+        .expect_err("books/42 is no subject")
+        .into()
+}
+
+fn not_values_of_a_subject() -> HttpError {
+    SubjectScheme::new("/books/{book_id}")
+        .try_build(&["a.b"])
+        .expect_err("a.b can not be part of a subject")
         .into()
 }
 
@@ -143,6 +158,16 @@ fn every_kind() -> Vec<(&'static str, HttpError, StatusCode)> {
             not_a_revision(),
             StatusCode::BAD_REQUEST,
         ),
+        (
+            "a value that is not a subject",
+            not_a_subject(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "values that can not compose a subject",
+            not_values_of_a_subject(),
+            StatusCode::BAD_REQUEST,
+        ),
         ("an empty range", empty_range(), StatusCode::BAD_REQUEST),
         (
             "an error without a category",
@@ -212,23 +237,32 @@ fn maps_what_wait_for_written_returns_once_the_time_has_run_out_to_500_not_to_50
 }
 
 #[test]
-fn maps_a_value_that_is_not_a_revision_to_400_unless_it_is_a_permanent_failure() {
-    assert_eq!(not_a_revision().status(), StatusCode::BAD_REQUEST);
+fn maps_a_value_that_is_not_a_revision_to_400_with_its_own_text() {
+    let error = not_a_revision();
 
-    // A command may declare a precondition on a revision that the caller
-    // handed over.
-    let in_a_precondition = HttpError::from(ExecuteError::<DomainError>::NotARevision(
-        parse_revision("abc").expect_err("abc is no revision"),
-    ));
-    assert_eq!(in_a_precondition.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(in_a_precondition.message(), r#"not a revision: "abc""#);
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(error.message(), r#"not a revision: "abc""#);
+}
 
-    // A view that is handed an event ID that is not a revision is the
-    // server's mistake.
-    let refusal = parse_revision("abc").expect_err("abc is no revision");
+#[test]
+fn maps_a_value_that_is_not_a_subject_to_400_with_its_own_text() {
+    let error = not_a_subject();
+
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
-        HttpError::of(ViewError::NotARevision(refusal)).status(),
-        StatusCode::INTERNAL_SERVER_ERROR
+        error.message(),
+        r#"not a subject: "books/42", which does not start with a slash"#
+    );
+}
+
+#[test]
+fn maps_values_that_can_not_compose_a_subject_to_400_with_their_own_text() {
+    let error = not_values_of_a_subject();
+
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        error.message(),
+        r#"value "a.b" for "book_id" may only contain A-Z, a-z, 0-9, underscores, and hyphens"#
     );
 }
 
@@ -300,6 +334,16 @@ fn explains_a_failure_the_caller_can_fix_with_its_own_text_without_logging_it() 
             "a value that is not a revision",
             not_a_revision(),
             r#"not a revision: "abc""#,
+        ),
+        (
+            "a value that is not a subject",
+            not_a_subject(),
+            r#"not a subject: "books/42", which does not start with a slash"#,
+        ),
+        (
+            "values that can not compose a subject",
+            not_values_of_a_subject(),
+            r#"value "a.b" for "book_id" may only contain A-Z, a-z, 0-9, underscores, and hyphens"#,
         ),
         (
             "an empty range",

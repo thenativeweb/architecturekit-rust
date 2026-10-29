@@ -8,7 +8,7 @@ use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use super::Database;
-use crate::{Event, EventOn, EventSchema, Events, Precondition, State};
+use crate::{Event, EventOn, EventSchema, Events, Precondition, State, Subject};
 
 #[derive(Debug, Serialize, Deserialize, Event)]
 #[event(type = "io.thenativeweb.test.entry-written")]
@@ -46,17 +46,22 @@ async fn hands_out_a_store_that_writes_and_reads() {
     let _ = store
         .write(
             vec![EventOn::new(
-                "/journals/1",
+                Subject::new("/journals/1"),
                 &EntryWritten {
                     text: "an entry".to_owned(),
                 },
             )],
-            vec![Precondition::on_pristine_subject("/journals/1")],
+            vec![Precondition::on_pristine_subject(Subject::new(
+                "/journals/1",
+            ))],
         )
         .await
         .expect("the entry is written");
 
-    let journal: Journal = store.load("/journals/1").await.expect("the journal loads");
+    let journal: Journal = store
+        .load(&Subject::new("/journals/1"))
+        .await
+        .expect("the journal loads");
     assert_eq!(journal.entries, ["an entry"]);
 }
 
@@ -127,7 +132,7 @@ async fn is_a_database_of_the_test_s_own_which_is_stopped_once_dropped() {
         .await
         .write(
             vec![EventOn::new(
-                "/journals/1",
+                Subject::new("/journals/1"),
                 &EntryWritten {
                     text: "only in the first".to_owned(),
                 },
@@ -139,7 +144,7 @@ async fn is_a_database_of_the_test_s_own_which_is_stopped_once_dropped() {
     let journal: Journal = second
         .store(SOURCE, JournalEvent::schemas())
         .await
-        .load("/journals/1")
+        .load(&Subject::new("/journals/1"))
         .await
         .expect("the journal loads");
     assert!(

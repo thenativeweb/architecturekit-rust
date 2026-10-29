@@ -21,8 +21,8 @@ use super::{
 };
 use crate::{
     Categorized, Category, Event, EventOn, IfLatestEventIsMissing, LowerBound, Order, Permanent,
-    Precondition, ReadError, ReadOptions, Store, Subjects, UpperBound, read::database_options,
-    revision::tests::NOT_REVISIONS,
+    Precondition, ReadError, ReadOptions, Revision, Store, Subject, Subjects, UpperBound,
+    read::{DatabaseBounds, database_options},
 };
 
 const READ_EVENTS: &str = "/api/v1/read-events";
@@ -30,11 +30,12 @@ const READ_EVENTS: &str = "/api/v1/read-events";
 /// Writes increments by the given amounts to the subject, and returns their
 /// IDs.
 async fn write(store: &Store, subject: &str, amounts: &[i64]) -> Vec<String> {
+    let subject = Subject::new(subject);
     let written = store
         .write(
             amounts
                 .iter()
-                .map(|by| EventOn::new(subject, &Incremented { by: *by }))
+                .map(|by| EventOn::new(subject.clone(), &Incremented { by: *by }))
                 .collect(),
             vec![Precondition::unconditionally()],
         )
@@ -47,7 +48,7 @@ async fn write(store: &Store, subject: &str, amounts: &[i64]) -> Vec<String> {
 async fn write_reset(store: &Store, subject: &str) -> String {
     let written = store
         .write(
-            vec![EventOn::new(subject, &Reset {})],
+            vec![EventOn::new(Subject::new(subject), &Reset {})],
             vec![Precondition::unconditionally()],
         )
         .await
@@ -85,25 +86,31 @@ fn bounded(lower_bound: LowerBound, upper_bound: UpperBound) -> ReadOptions {
     }
 }
 
+/// Reads an event ID that the database has written, or that a test spells
+/// out, as a revision.
+fn revision(id: &str) -> Revision {
+    id.parse().expect("the ID is a revision")
+}
+
 fn after(id: &str) -> LowerBound {
-    LowerBound::AfterEvent(id.to_owned())
+    LowerBound::AfterEvent(revision(id))
 }
 
 fn from(id: &str) -> LowerBound {
-    LowerBound::FromEvent(id.to_owned())
+    LowerBound::FromEvent(revision(id))
 }
 
 fn up_to(id: &str) -> UpperBound {
-    UpperBound::UpToEvent(id.to_owned())
+    UpperBound::UpToEvent(revision(id))
 }
 
 fn before(id: &str) -> UpperBound {
-    UpperBound::BeforeEvent(id.to_owned())
+    UpperBound::BeforeEvent(revision(id))
 }
 
 fn from_latest_reset(subject: &str, if_missing: IfLatestEventIsMissing) -> LowerBound {
     LowerBound::FromLatestEvent {
-        subject: subject.to_owned(),
+        subject: Subject::new(subject),
         event_type: Reset::EVENT_TYPE.to_owned(),
         if_missing,
     }
@@ -119,7 +126,7 @@ async fn reads_the_events_of_a_subject_in_order() {
 
     let events = read(
         &store,
-        &Subjects::exact("/books/42"),
+        &Subjects::exact(Subject::new("/books/42")),
         &ReadOptions::default(),
     )
     .await
@@ -138,7 +145,7 @@ async fn reads_an_exact_subject_without_the_subjects_below_it() {
 
     let events = read(
         &store,
-        &Subjects::exact("/books/42"),
+        &Subjects::exact(Subject::new("/books/42")),
         &ReadOptions::default(),
     )
     .await
@@ -155,9 +162,13 @@ async fn reads_a_subject_tree_with_the_subjects_below_it() {
     let _ = write(&store, "/books/42/notes", &[2]).await;
     let _ = write(&store, "/readers/7", &[3]).await;
 
-    let events = read(&store, &Subjects::tree("/books"), &ReadOptions::default())
-        .await
-        .expect("the events are read");
+    let events = read(
+        &store,
+        &Subjects::tree(Subject::new("/books")),
+        &ReadOptions::default(),
+    )
+    .await
+    .expect("the events are read");
 
     let subjects: Vec<&str> = events.iter().map(StoredEvent::subject).collect();
     assert_eq!(subjects, ["/books/42", "/books/42/notes"]);
@@ -169,7 +180,7 @@ async fn stops_when_the_caller_stops() {
     let store = database.store().await;
     let _ = write(&store, "/books/42", &[1, 2, 3]).await;
 
-    let subjects = Subjects::exact("/books/42");
+    let subjects = Subjects::exact(Subject::new("/books/42"));
     let options = ReadOptions::default();
     let first = store
         .read(&subjects, &options)
@@ -203,7 +214,7 @@ async fn refuses_an_event_whose_hash_does_not_match() {
 
     let failure = read(
         &store,
-        &Subjects::exact("/books/42"),
+        &Subjects::exact(Subject::new("/books/42")),
         &ReadOptions::default(),
     )
     .await
@@ -228,7 +239,7 @@ async fn ends_with_the_first_failure() {
         .client()
         .await;
     let store = Store::builder(client, SOURCE).build();
-    let subjects = Subjects::exact("/books/42");
+    let subjects = Subjects::exact(Subject::new("/books/42"));
     let options = ReadOptions::default();
 
     let items = store
@@ -255,7 +266,7 @@ async fn sorts_a_rejected_api_token_as_permanent() {
 
     let failure = read(
         &store,
-        &Subjects::exact("/books/42"),
+        &Subjects::exact(Subject::new("/books/42")),
         &ReadOptions::default(),
     )
     .await
@@ -276,7 +287,7 @@ async fn sorts_an_unreachable_database_as_transient() {
 
     let failure = read(
         &store,
-        &Subjects::exact("/books/42"),
+        &Subjects::exact(Subject::new("/books/42")),
         &ReadOptions::default(),
     )
     .await
@@ -305,7 +316,7 @@ async fn sorts_an_answer_that_does_not_come_from_an_eventsourcingdb_as_transient
 
         let failure = read(
             &store,
-            &Subjects::exact("/books/42"),
+            &Subjects::exact(Subject::new("/books/42")),
             &ReadOptions::default(),
         )
         .await
@@ -335,7 +346,7 @@ async fn reads_within_the_bounds() {
     let database = Database::start().await;
     let store = database.store().await;
     let _ = write(&store, "/books/42", &[1, 2, 3, 4, 5]).await;
-    let subjects = Subjects::exact("/books/42");
+    let subjects = Subjects::exact(Subject::new("/books/42"));
 
     for (name, options, expected) in [
         (
@@ -390,7 +401,7 @@ async fn takes_a_bound_that_is_not_an_event_of_the_subjects_that_are_read() {
 
     let events = read(
         &store,
-        &Subjects::exact("/books/42"),
+        &Subjects::exact(Subject::new("/books/42")),
         &bounded(from(&other[0]), UpperBound::Unbounded),
     )
     .await
@@ -403,7 +414,7 @@ async fn takes_a_bound_that_is_not_an_event_of_the_subjects_that_are_read() {
 async fn refuses_options_that_check_read_options_refuses_before_the_database_is_asked() {
     let (url, requests) = Fake::new(Api::V1).start().await;
     let store = Store::builder(eventsourcingdb::Client::new(url, "secret"), SOURCE).build();
-    let subjects = Subjects::exact("/books/42");
+    let subjects = Subjects::exact(Subject::new("/books/42"));
 
     let empty = read(
         &store,
@@ -419,21 +430,10 @@ async fn refuses_options_that_check_read_options_refuses_before_the_database_is_
     );
     assert_eq!(empty.category(), None);
 
-    for (name, id) in [("an empty one", "")].into_iter().chain(NOT_REVISIONS) {
-        let refusal = read(&store, &subjects, &bounded(from(id), UpperBound::Unbounded))
-            .await
-            .expect_err(name);
-        assert!(
-            matches!(refusal, ReadError::NotARevision(_)),
-            "{name}: {refusal:?}"
-        );
-        assert_eq!(refusal.category(), None, "{name}");
-    }
-
     assert_eq!(requests.count(), 0, "the database is not asked");
 
-    // IDs that are fine, and the latest event of a type, which has no ID, go
-    // to the database.
+    // Bounds that leave room for an event, and the latest event of a type,
+    // which has no ID, go to the database.
     let _ = read(&store, &subjects, &bounded(from("0"), up_to("5")))
         .await
         .expect("the bounds are fine");
@@ -467,7 +467,7 @@ async fn hands_out_the_newest_event_first_within_the_bounds() {
 
     let all = read(
         &store,
-        &Subjects::exact("/books/42"),
+        &Subjects::exact(Subject::new("/books/42")),
         &newest_first(LowerBound::Unbounded, UpperBound::Unbounded),
     )
     .await
@@ -476,7 +476,7 @@ async fn hands_out_the_newest_event_first_within_the_bounds() {
 
     let bounded = read(
         &store,
-        &Subjects::exact("/books/42"),
+        &Subjects::exact(Subject::new("/books/42")),
         &newest_first(LowerBound::Unbounded, before("2")),
     )
     .await
@@ -485,7 +485,7 @@ async fn hands_out_the_newest_event_first_within_the_bounds() {
 
     let tree = read(
         &store,
-        &Subjects::tree("/books"),
+        &Subjects::tree(Subject::new("/books")),
         &newest_first(LowerBound::Unbounded, UpperBound::Unbounded),
     )
     .await
@@ -507,7 +507,7 @@ async fn reads_from_the_latest_event_of_the_type_and_includes_it() {
 
     let events = read(
         &store,
-        &Subjects::exact("/books/42"),
+        &Subjects::exact(Subject::new("/books/42")),
         &bounded(
             from_latest_reset("/books/42", IfLatestEventIsMissing::ReadNothing),
             UpperBound::Unbounded,
@@ -524,7 +524,7 @@ async fn reads_everything_or_nothing_if_the_latest_event_is_missing() {
     let database = Database::start().await;
     let store = database.store().await;
     let _ = write(&store, "/books/42", &[1, 2]).await;
-    let subjects = Subjects::exact("/books/42");
+    let subjects = Subjects::exact(Subject::new("/books/42"));
 
     let everything = read(
         &store,
@@ -573,7 +573,7 @@ async fn looks_for_the_latest_event_on_the_given_subject_alone() {
 
     let events = read(
         &store,
-        &Subjects::tree("/books/42"),
+        &Subjects::tree(Subject::new("/books/42")),
         &bounded(
             from_latest_reset("/books/42", IfLatestEventIsMissing::ReadNothing),
             UpperBound::Unbounded,
@@ -599,7 +599,7 @@ async fn reads_a_subject_tree_from_the_latest_event_of_a_subject_in_it() {
 
     let events = read(
         &store,
-        &Subjects::tree("/books"),
+        &Subjects::tree(Subject::new("/books")),
         &bounded(
             from_latest_reset("/books/42", IfLatestEventIsMissing::ReadNothing),
             UpperBound::Unbounded,
@@ -618,7 +618,7 @@ async fn goes_with_an_upper_bound_and_is_refused_if_the_latest_event_comes_after
     let _ = write(&store, "/books/42", &[1]).await;
     let latest = write_reset(&store, "/books/42").await;
     let _ = write(&store, "/books/42", &[2, 3]).await;
-    let subjects = Subjects::exact("/books/42");
+    let subjects = Subjects::exact(Subject::new("/books/42"));
     let from_latest = || from_latest_reset("/books/42", IfLatestEventIsMissing::ReadNothing);
 
     let events = read(&store, &subjects, &bounded(from_latest(), up_to("2")))
@@ -644,7 +644,7 @@ async fn hands_out_no_events_for_a_range_that_is_only_empty_for_now_but_the_even
     let database = Database::start().await;
     let store = database.store().await;
     let written = write(&store, "/books/42", &[1, 2, 3, 4, 5]).await;
-    let subjects = Subjects::exact("/books/42");
+    let subjects = Subjects::exact(Subject::new("/books/42"));
     let after_the_last = bounded(after(&written[4]), UpperBound::Unbounded);
 
     let now = read(&store, &subjects, &after_the_last)
@@ -669,7 +669,7 @@ async fn refuses_exactly_the_bounds_the_database_would_refuse() {
     let store = database.store().await;
     let client = database.client().await;
     let _ = write(&store, "/books/42", &[1, 2, 3, 4, 5]).await;
-    let subjects = Subjects::exact("/books/42");
+    let subjects = Subjects::exact(Subject::new("/books/42"));
 
     let mut lower_bounds = vec![
         LowerBound::Unbounded,
@@ -686,10 +686,11 @@ async fn refuses_exactly_the_bounds_the_database_would_refuse() {
             let options = bounded(lower_bound.clone(), upper_bound.clone());
 
             let is_refused_by_the_kit = crate::check_read_options(&options).is_err();
+            let bounds = DatabaseBounds::of(&options);
             let is_refused_by_the_database = match client
                 .read_events(
-                    subjects.subject(),
-                    Some(database_options(&subjects, &options)),
+                    subjects.subject().as_str(),
+                    Some(database_options(&subjects, &options, &bounds)),
                 )
                 .await
             {

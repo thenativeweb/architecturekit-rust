@@ -1,8 +1,7 @@
 // These tests check check_read_options, which Store::read applies before it
 // asks the database: every combination of bounds, empty ranges, also at the
-// largest revision and from the latest event, contradicting options, and a
-// subject that has to start with a slash. The tests of the store show that it
-// does.
+// largest revision and from the latest event, and contradicting options. The
+// tests of the store show that it does.
 //
 // The options of a read are an enum per bound and order, so two lower bounds,
 // two upper bounds, two orders, and an IfLatestEventIsMissing that is neither
@@ -10,25 +9,30 @@
 
 use crate::{
     Categorized, IfLatestEventIsMissing, LowerBound, Order, ReadOptions, ReadOptionsError,
-    Subjects, UpperBound, check_read_options, revision::tests::NOT_REVISIONS,
+    Revision, Subject, Subjects, UpperBound, check_read_options,
 };
 
 const LARGEST_REVISION: &str = "9223372036854775807";
 
+/// Reads a revision that a test spells out.
+fn revision(id: &str) -> Revision {
+    id.parse().expect("the test spells out a revision")
+}
+
 fn from(id: &str) -> LowerBound {
-    LowerBound::FromEvent(id.to_owned())
+    LowerBound::FromEvent(revision(id))
 }
 
 fn after(id: &str) -> LowerBound {
-    LowerBound::AfterEvent(id.to_owned())
+    LowerBound::AfterEvent(revision(id))
 }
 
 fn up_to(id: &str) -> UpperBound {
-    UpperBound::UpToEvent(id.to_owned())
+    UpperBound::UpToEvent(revision(id))
 }
 
 fn before(id: &str) -> UpperBound {
-    UpperBound::BeforeEvent(id.to_owned())
+    UpperBound::BeforeEvent(revision(id))
 }
 
 fn bounded(lower_bound: LowerBound, upper_bound: UpperBound) -> ReadOptions {
@@ -41,7 +45,7 @@ fn bounded(lower_bound: LowerBound, upper_bound: UpperBound) -> ReadOptions {
 
 fn from_latest(if_missing: IfLatestEventIsMissing) -> LowerBound {
     LowerBound::FromLatestEvent {
-        subject: "/books/42".to_owned(),
+        subject: Subject::new("/books/42"),
         event_type: "io.thenativeweb.test.reset".to_owned(),
         if_missing,
     }
@@ -163,9 +167,9 @@ fn bounded_reads() -> Vec<(&'static str, ReadOptions, Option<&'static str>)> {
             Some(r#"empty range: no event can lie after "5" and before "0""#),
         ),
         (
-            "IDs with leading zeros, which are named as they are given",
+            "IDs read with leading zeros, which are named as their numbers",
             bounded(after("007"), before("8")),
-            Some(r#"empty range: no event can lie after "007" and before "8""#),
+            Some(r#"empty range: no event can lie after "7" and before "8""#),
         ),
     ]
 }
@@ -207,12 +211,11 @@ fn refuses_empty_ranges_at_the_largest_revision() {
     // A revision ends at 2^63-1, so the range after the largest one starts at
     // 2^63, which still fits the numbers the bounds are compared as, but which
     // no event can ever reach.
-    let leading_zero = format!("0{LARGEST_REVISION}");
     for (name, options, refusal) in [
         (
-            "AfterEvent alone, given with a leading zero",
-            bounded(after(&leading_zero), UpperBound::Unbounded),
-            Some(r#"empty range: no event can lie after "09223372036854775807""#),
+            "AfterEvent alone",
+            bounded(after(LARGEST_REVISION), UpperBound::Unbounded),
+            Some(r#"empty range: no event can lie after "9223372036854775807""#),
         ),
         (
             "AfterEvent of the one before alone",
@@ -301,51 +304,6 @@ fn refuses_only_an_upper_bound_before_the_first_event_from_the_latest_event() {
 }
 
 #[test]
-fn refuses_an_id_that_is_not_a_revision_for_every_bound() {
-    for (name, id) in [("an empty one", "")].into_iter().chain(NOT_REVISIONS) {
-        for options in [
-            bounded(from(id), UpperBound::Unbounded),
-            bounded(after(id), UpperBound::Unbounded),
-            bounded(LowerBound::Unbounded, up_to(id)),
-            bounded(LowerBound::Unbounded, before(id)),
-        ] {
-            let refusal = check_read_options(&options).expect_err(name);
-
-            assert!(
-                matches!(refusal, ReadOptionsError::NotARevision(_)),
-                "{name}: {refusal:?}"
-            );
-            assert_eq!(
-                refusal.to_string(),
-                format!("not a revision: {id:?}"),
-                "{name}"
-            );
-        }
-    }
-}
-
-#[test]
-fn refuses_the_second_bound_as_well_if_the_first_one_is_fine() {
-    assert_eq!(
-        refusal_of(&bounded(from("1"), before("abc"))).as_deref(),
-        Some(r#"not a revision: "abc""#)
-    );
-}
-
-#[test]
-fn refuses_the_lower_bound_first_and_an_id_that_is_not_a_revision_before_the_range() {
-    assert_eq!(
-        refusal_of(&bounded(from("abc"), before("xyz"))).as_deref(),
-        Some(r#"not a revision: "abc""#)
-    );
-    assert_eq!(
-        refusal_of(&bounded(after("5"), before("xyz"))).as_deref(),
-        Some(r#"not a revision: "xyz""#),
-        "a range that is empty, if its bounds were revisions, is refused for the ID first"
-    );
-}
-
-#[test]
 fn accepts_the_options_that_leave_room_for_an_event() {
     for options in [
         ReadOptions::default(),
@@ -373,51 +331,22 @@ fn panics_for_the_latest_event_of_a_type_newest_first() {
 }
 
 #[test]
-#[should_panic(
-    expected = r#"architecturekit: a subject starts with a slash, which "books/42" does not"#
-)]
-fn panics_for_the_latest_event_on_a_subject_without_a_leading_slash() {
-    let _ = check_read_options(&ReadOptions {
-        lower_bound: LowerBound::FromLatestEvent {
-            subject: "books/42".to_owned(),
-            event_type: "io.thenativeweb.test.reset".to_owned(),
-            if_missing: IfLatestEventIsMissing::ReadNothing,
-        },
-        ..ReadOptions::default()
-    });
-}
-
-#[test]
 #[should_panic(expected = "only oldest first")]
-fn panics_before_it_checks_the_ids() {
+fn panics_before_it_checks_the_range() {
     let _ = check_read_options(&ReadOptions {
         lower_bound: from_latest(IfLatestEventIsMissing::ReadEverything),
-        upper_bound: before("abc"),
+        upper_bound: before("0"),
         order: Order::NewestFirst,
     });
 }
 
 #[test]
 fn tells_a_subject_tree_from_an_exact_subject() {
-    let tree = Subjects::tree("/books");
-    let exact = Subjects::exact("/books");
+    let tree = Subjects::tree(Subject::new("/books"));
+    let exact = Subjects::exact(Subject::new("/books"));
 
-    assert_eq!(tree.subject(), "/books");
+    assert_eq!(tree.subject(), &Subject::new("/books"));
     assert!(tree.is_tree());
     assert!(!exact.is_tree());
     assert_ne!(tree, exact);
-}
-
-#[test]
-#[should_panic(
-    expected = r#"architecturekit: a subject starts with a slash, which "books" does not"#
-)]
-fn panics_for_a_subject_tree_without_a_leading_slash() {
-    let _ = Subjects::tree("books");
-}
-
-#[test]
-#[should_panic(expected = r#"architecturekit: a subject starts with a slash, which "" does not"#)]
-fn panics_for_an_exact_subject_without_a_leading_slash() {
-    let _ = Subjects::exact("");
 }

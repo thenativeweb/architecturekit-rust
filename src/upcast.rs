@@ -3,7 +3,7 @@ use std::{collections::HashMap, error::Error, fmt};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::{Failure, Permanent};
+use crate::{Failure, Permanent, Revision, Subject, revision::id_of, subject::subject_of};
 
 #[cfg(test)]
 mod tests;
@@ -22,39 +22,42 @@ const MAX_UPCAST_STEPS: usize = 16;
 pub struct UpcastEvent {
     event_type: String,
     data: Value,
-    subject: String,
-    id: String,
+    subject: Subject,
+    id: Revision,
     time: DateTime<Utc>,
     source: String,
 }
 
 impl UpcastEvent {
-    /// Creates a stored event of the given type with the given data, without
-    /// a subject, an ID or a source, at the start of 1970. It is meant for
-    /// tests of upcasters, together with [`replay_stored`](crate::replay_stored)
-    /// and [`step_stored`](crate::step_stored).
+    /// Creates a stored event of the given type with the given data, with the
+    /// ID 0, on the subject `/`, without a source, at the start of 1970. It is
+    /// meant for tests of upcasters, together with
+    /// [`replay_stored`](crate::replay_stored) and
+    /// [`step_stored`](crate::step_stored).
     #[must_use]
     pub fn new(event_type: impl Into<String>, data: Value) -> Self {
         Self {
             event_type: event_type.into(),
             data,
-            subject: String::new(),
-            id: String::new(),
+            subject: Subject::root(),
+            id: Revision::from(0),
             time: DateTime::UNIX_EPOCH,
             source: String::new(),
         }
     }
 
     /// Takes an event of the client SDK as stored, for the upcasters to see.
-    pub(crate) fn from_stored(event: &eventsourcingdb::Event) -> Self {
-        Self {
+    /// An event whose ID is not a revision, or whose subject is not one,
+    /// neither of which the database ever writes, fails permanently.
+    pub(crate) fn from_stored(event: &eventsourcingdb::Event) -> Result<Self, Permanent> {
+        Ok(Self {
             event_type: event.ty().to_owned(),
             data: event.data().clone(),
-            subject: event.subject().to_owned(),
-            id: event.id().to_owned(),
+            subject: subject_of(event)?,
+            id: id_of(event)?,
             time: *event.time(),
             source: event.source().to_owned(),
-        }
+        })
     }
 
     /// Returns the event with another type, as an upcaster does for the next
@@ -93,14 +96,14 @@ impl UpcastEvent {
 
     /// Returns the subject the event was stored in.
     #[must_use]
-    pub fn subject(&self) -> &str {
+    pub fn subject(&self) -> &Subject {
         &self.subject
     }
 
     /// Returns the ID the event was stored under.
     #[must_use]
-    pub fn id(&self) -> &str {
-        &self.id
+    pub fn id(&self) -> Revision {
+        self.id
     }
 
     /// Returns the time the event was stored at.

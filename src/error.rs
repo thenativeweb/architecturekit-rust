@@ -8,9 +8,22 @@ mod tests;
 /// help.
 ///
 /// Ask for the category rather than for a concrete failure, so that new
-/// failures do not break existing code. Some failures belong to no category,
-/// such as a write whose outcome is unknown, or an event ID of the caller that
-/// is not a revision; their [`Categorized::category`] is `None`.
+/// failures do not break existing code. The categories are closed on purpose:
+/// they answer these two questions and no others, so a new one would come with
+/// a new major version, rather than fall into a catch-all arm unnoticed.
+///
+/// A failure that the two questions do not fit belongs to no category, so its
+/// [`Categorized::category`] is `None`, and the failure itself says what it is:
+///
+/// - A write whose outcome is unknown may have stored its events, so it must
+///   not be tried again blindly.
+/// - A text of the caller that can not be read as a revision or a subject,
+///   values of the caller that can not compose a subject, and bounds of a read
+///   that leave no room for an event, mean that the request is wrong.
+/// - A view that has not caught up with a write tells that the write succeeded,
+///   but its result is not visible yet.
+/// - A run of a projection that stopped because its token was cancelled did
+///   not fail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Category {
     /// A business rule refused the command. The caller has to change what it

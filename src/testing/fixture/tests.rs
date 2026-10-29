@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
-    Categorized, Category, Command, Decider, Event, Events, ExecuteError, Precondition, State,
-    UpcastEvent, Upcasters, check_preconditions,
+    Categorized, Category, Command, Decider, Event, Events, ExecuteError, Precondition, Revision,
+    State, Subject, UpcastEvent, Upcasters, check_preconditions,
     testing::{given, given_stored},
 };
 
@@ -141,8 +141,8 @@ impl Open {
 }
 
 impl Command for Open {
-    fn subject(&self) -> String {
-        "/account/1".to_owned()
+    fn subject(&self) -> Subject {
+        Subject::new("/account/1")
     }
 
     fn preconditions(&self) -> Vec<Precondition> {
@@ -367,10 +367,15 @@ async fn hands_out_the_result_for_what_then_failed_does_not_compare() {
 
     // A refusal of the kit, which the decider never sees.
     let decision = given(&decider(), [])
-        .when(open("golo").declaring(|| vec![Precondition::on_event_id("/account/1", "abc")]))
+        .when(open("golo").declaring(|| {
+            vec![
+                Precondition::unconditionally(),
+                Precondition::on_state_read(),
+            ]
+        }))
         .await;
     assert!(
-        matches!(decision.result(), Err(ExecuteError::NotARevision(_))),
+        matches!(decision.result(), Err(ExecuteError::Permanent(_))),
         "{decision:?}"
     );
 
@@ -706,30 +711,25 @@ async fn does_not_let_the_decider_decide_on_a_command_it_refuses() {
 }
 
 #[tokio::test]
-async fn refuses_an_id_of_on_event_id_that_is_not_a_revision_with_the_error_of_execute() {
-    let decision = given(&decider(), [])
-        .when(open("golo").declaring(|| vec![Precondition::on_event_id("/account/1", "abc")]))
-        .await;
-
-    assert_failure(
-        || {
-            let _ = decision.then_nothing();
-        },
-        r#"not a revision: "abc""#,
-    );
-}
-
-#[tokio::test]
 async fn lets_the_decider_decide_on_every_valid_declaration() {
     let declarations: [Declaring; 5] = [
         || vec![Precondition::on_state_read()],
         || vec![Precondition::unconditionally()],
-        || vec![Precondition::on_pristine_subject("/account/1")],
-        || vec![Precondition::on_event_id("/account/1", "7")],
+        || {
+            vec![Precondition::on_pristine_subject(Subject::new(
+                "/account/1",
+            ))]
+        },
+        || {
+            vec![Precondition::on_event_id(
+                Subject::new("/account/1"),
+                Revision::from(7),
+            )]
+        },
         || {
             vec![
                 Precondition::on_state_read(),
-                Precondition::on_populated_subject("/account/2"),
+                Precondition::on_populated_subject(Subject::new("/account/2")),
                 Precondition::require(eventsourcingdb::Precondition::is_eventql_query_true(
                     "FROM e IN events PROJECT INTO true",
                 )),
@@ -752,9 +752,9 @@ async fn compares_the_declared_preconditions_of_every_kind() {
     given(&decider(), [])
         .when(open("golo").declaring(|| {
             vec![
-                Precondition::on_pristine_subject("/account/1"),
-                Precondition::on_populated_subject("/account/2"),
-                Precondition::on_event_id("/account/3", "9"),
+                Precondition::on_pristine_subject(Subject::new("/account/1")),
+                Precondition::on_populated_subject(Subject::new("/account/2")),
+                Precondition::on_event_id(Subject::new("/account/3"), Revision::from(9)),
                 Precondition::require(eventsourcingdb::Precondition::is_eventql_query_true(
                     "FROM e IN events PROJECT INTO true",
                 )),
@@ -763,9 +763,9 @@ async fn compares_the_declared_preconditions_of_every_kind() {
         }))
         .await
         .then_preconditions([
-            Precondition::on_pristine_subject("/account/1"),
-            Precondition::on_populated_subject("/account/2"),
-            Precondition::on_event_id("/account/3", "9"),
+            Precondition::on_pristine_subject(Subject::new("/account/1")),
+            Precondition::on_populated_subject(Subject::new("/account/2")),
+            Precondition::on_event_id(Subject::new("/account/3"), Revision::from(9)),
             Precondition::require(eventsourcingdb::Precondition::is_eventql_query_true(
                 "FROM e IN events PROJECT INTO true",
             )),
@@ -808,19 +808,26 @@ async fn fails_then_preconditions_on_the_wrong_count() {
 #[tokio::test]
 async fn fails_then_preconditions_on_the_wrong_content() {
     let decision = given(&decider(), [])
-        .when(open("golo").declaring(|| vec![Precondition::on_pristine_subject("/account/1")]))
+        .when(open("golo").declaring(|| {
+            vec![Precondition::on_pristine_subject(Subject::new(
+                "/account/1",
+            ))]
+        }))
         .await;
 
     assert_failure(
         || {
-            let _ =
-                decision.then_preconditions([Precondition::on_pristine_subject("/account/other")]);
+            let _ = decision.then_preconditions([Precondition::on_pristine_subject(Subject::new(
+                "/account/other",
+            ))]);
         },
         "/account/other",
     );
     assert_eq!(
         failure_of(|| {
-            let _ = decision.then_preconditions([Precondition::on_populated_subject("/account/1")]);
+            let _ = decision.then_preconditions([Precondition::on_populated_subject(
+                Subject::new("/account/1"),
+            )]);
         }),
         r#"precondition 0: got Precondition::require({"payload":{"subject":"/account/1"},"type":"isSubjectPristine"}), want Precondition::require({"payload":{"subject":"/account/1"},"type":"isSubjectPopulated"})"#,
     );
@@ -841,7 +848,9 @@ async fn tells_a_recursive_subject_check_from_one_of_the_subject_alone() {
 
     assert_failure(
         || {
-            let _ = decision.then_preconditions([Precondition::on_pristine_subject("/account/1")]);
+            let _ = decision.then_preconditions([Precondition::on_pristine_subject(Subject::new(
+                "/account/1",
+            ))]);
         },
         "recursive",
     );

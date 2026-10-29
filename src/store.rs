@@ -8,18 +8,22 @@ use eventsourcingdb::{
         Bound, BoundType, ReadEventMissingStrategy, ReadEventsOptions, ReadFromLatestEventOptions,
     },
 };
-use futures_util::{Stream, StreamExt, future};
+use futures_util::{
+    Stream, StreamExt,
+    future::{self, Either},
+    stream,
+};
 use serde_json::Value;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::Reconnect;
 use crate::{
     Command, Decider, Event, EventSchema, Events, Failure, Permanent, Precondition, ReadOptions,
-    State, Subjects, Transient, UpcastEvent,
+    Revision, State, Subject, Subjects, Transient, UpcastEvent,
     command::{
         checked_preconditions, resolve_preconditions, violated_precondition, write_preconditions,
     },
-    read::{check_read_options, database_options},
+    read::{DatabaseBounds, check_read_options, database_options},
     state::{evolve_by_stored, from_latest_of},
 };
 
@@ -44,8 +48,7 @@ use state_cache::StateCache;
 /// all events it writes:
 ///
 /// ```no_run
-/// use architecturekit::Store;
-/// use eventsourcingdb::Client;
+/// use architecturekit::{Store, eventsourcingdb::Client};
 ///
 /// let client = Client::new("http://localhost:3000".parse().unwrap(), "secret");
 /// let store = Store::builder(client, "https://library.eventsourcingdb.io").build();
@@ -240,7 +243,7 @@ impl StoreBuilder {
 /// An event together with the subject it is written to, for [`Store::write`].
 #[derive(Debug)]
 pub struct EventOn {
-    subject: String,
+    subject: Subject,
     event_type: &'static str,
     data: Result<Value, serde_json::Error>,
 }
@@ -249,9 +252,9 @@ impl EventOn {
     /// Puts an event on a subject. Its data is written as JSON right away, and
     /// data that can not be written makes [`Store::write`] fail permanently.
     #[must_use]
-    pub fn new<E: Event>(subject: impl Into<String>, event: &E) -> Self {
+    pub fn new<E: Event>(subject: Subject, event: &E) -> Self {
         Self {
-            subject: subject.into(),
+            subject,
             event_type: E::EVENT_TYPE,
             data: serde_json::to_value(event),
         }
@@ -287,14 +290,15 @@ impl Store {
     ///
     /// Fails transiently if the database can not be reached, and permanently
     /// if an event fails its verification, if the state has no rule for an
-    /// event, if the data of an event does not match its type, or if the
-    /// database refuses the request.
+    /// event, if the data of an event does not match its type, if the ID of
+    /// an event is not a revision or its subject not a subject, neither of
+    /// which the database ever writes, or if the database refuses the request.
     ///
     /// # Panics
     ///
     /// A state that starts from an event type it has no rule for is a
     /// programming error, so this panics (see [`State::from_latest`]).
-    pub async fn load<S: State>(&self, subject: &str) -> Result<S, LoadError> {
+    pub async fn load<S: State>(&self, subject: &Subject) -> Result<S, LoadError> {
         Ok(self.fold::<S>(subject).await?.0)
     }
 
@@ -305,9 +309,9 @@ impl Store {
     /// the events after the one that state was built from.
     pub(crate) async fn fold<S: State>(
         &self,
-        subject: &str,
-    ) -> Result<(S, Option<String>), LoadError> {
-        let doing = format!("reading {subject:?}");
+        subject: &Subject,
+    ) -> Result<(S, Option<Revision>), LoadError> {
+        let doing = format!("reading {:?}", subject.as_str());
         let from_latest = from_latest_of::<S>();
         let cached = self
             .state_cache
@@ -318,7 +322,8 @@ impl Store {
             None => (S::default(), None),
         };
 
-        let options = match &cached_event_id {
+        let after = cached_event_id.map(|last_event_id| last_event_id.to_string());
+        let options = match &after {
             Some(last_event_id) => ReadEventsOptions {
                 lower_bound: Some(Bound {
                     bound_type: BoundType::Exclusive,
@@ -329,7 +334,7 @@ impl Store {
             None => ReadEventsOptions {
                 from_latest_event: from_latest.map(|event_type| ReadFromLatestEventOptions {
                     if_event_is_missing: ReadEventMissingStrategy::ReadEverything,
-                    subject,
+                    subject: subject.as_str(),
                     ty: event_type,
                 }),
                 ..ReadEventsOptions::default()
@@ -338,23 +343,24 @@ impl Store {
 
         let events = self
             .client
-            .read_events(subject, Some(options))
+            .read_events(subject.as_str(), Some(options))
             .await
             .map_err(|error| LoadError::from(read_failure(error, &doing)))?;
         let mut events = pin!(events);
 
-        let mut last_event_id = cached_event_id.clone();
+        let mut last_event_id = cached_event_id;
 
         while let Some(event) = events.next().await {
             let event = event.map_err(|error| LoadError::from(read_failure(error, &doing)))?;
             self.verify(&event)?;
 
-            last_event_id = Some(event.id().to_owned());
-            current = evolve_by_stored(current, UpcastEvent::from_stored(&event))?;
+            let event = UpcastEvent::from_stored(&event)?;
+            last_event_id = Some(event.id());
+            current = evolve_by_stored(current, event)?;
         }
 
-        if let (Some(cache), Some(last_event_id)) = (&self.state_cache, &last_event_id) {
-            cache.put(subject, current.clone(), last_event_id.clone());
+        if let (Some(cache), Some(last_event_id)) = (&self.state_cache, last_event_id) {
+            cache.put(subject, current.clone(), last_event_id);
         }
 
         Ok((current, last_event_id))
@@ -374,11 +380,10 @@ impl Store {
     /// # Errors
     ///
     /// Fails before the database is asked, as [`check_read_options`] does,
-    /// with [`ReadError::NotARevision`] for an ID of a bound that is not the
-    /// ID of an event, and with [`ReadError::EmptyRange`] for bounds that
-    /// leave no room for an event. Otherwise it fails, or the stream ends,
-    /// with [`ReadError::Transient`] if the database can not be reached, and
-    /// with [`ReadError::Permanent`] if an event fails its verification or the
+    /// with [`ReadError::EmptyRange`] for bounds that leave no room for an
+    /// event. Otherwise it fails, or the stream ends, with
+    /// [`ReadError::Transient`] if the database can not be reached, and with
+    /// [`ReadError::Permanent`] if an event fails its verification or the
     /// database refuses the read.
     ///
     /// # Panics
@@ -392,32 +397,70 @@ impl Store {
     ) -> Result<impl Stream<Item = Result<eventsourcingdb::Event, ReadError>> + 'a, ReadError> {
         check_read_options(options)?;
 
-        let doing = format!("reading {:?}", subjects.subject());
-        let events = self
-            .client
-            .read_events(
-                subjects.subject(),
-                Some(database_options(subjects, options)),
-            )
-            .await
-            .map_err(|error| ReadError::from(read_failure(error, &doing)))?;
+        let doing = format!("reading {:?}", subjects.subject().as_str());
+        let (opened, is_opened) = oneshot::channel();
+        let (sender, receiver) = mpsc::channel(1);
 
-        Ok(events
-            .map(move |event| {
-                let event = event.map_err(|error| ReadError::from(read_failure(error, &doing)))?;
-                self.verify(&event)?;
-
-                Ok(event)
-            })
-            .scan(false, |has_failed, event: Result<_, ReadError>| {
-                // The stream ends with the first failure.
-                if *has_failed {
-                    return future::ready(None);
+        // The client takes the IDs of the bounds as text, which the events it
+        // hands out may borrow, so the text and the events live in one future,
+        // which hands on every event as it reads it.
+        let reading = Box::pin(async move {
+            let bounds = DatabaseBounds::of(options);
+            let requested = self
+                .client
+                .read_events(
+                    subjects.subject().as_str(),
+                    Some(database_options(subjects, options, &bounds)),
+                )
+                .await;
+            let events = match requested {
+                Ok(events) => events,
+                Err(error) => {
+                    let _ = opened.send(Err(ReadError::from(read_failure(error, &doing))));
+                    return;
                 }
-                *has_failed = event.is_err();
+            };
+            if opened.send(Ok(())).is_err() {
+                return;
+            }
 
-                future::ready(Some(event))
-            }))
+            let mut events = pin!(events);
+            while let Some(event) = events.next().await {
+                let event = event
+                    .map_err(|error| ReadError::from(read_failure(error, &doing)))
+                    .and_then(|event| {
+                        self.verify(&event)?;
+                        Ok(event)
+                    });
+
+                // The stream ends with the first failure, and once the
+                // caller has dropped it.
+                let has_failed = event.is_err();
+                if sender.send(event).await.is_err() || has_failed {
+                    return;
+                }
+            }
+        });
+
+        // A read that the database refuses at once fails here, rather than as
+        // the first element of the stream. The future may have read everything
+        // by then, and is driven on otherwise.
+        let (opened, reading) = match future::select(reading, is_opened).await {
+            Either::Left(((), is_opened)) => (is_opened.await, None),
+            Either::Right((opened, reading)) => (opened, Some(reading)),
+        };
+        if let Ok(Err(failure)) = opened {
+            return Err(failure);
+        }
+
+        let events = stream::unfold(receiver, |mut receiver| async move {
+            receiver.recv().await.map(|event| (event, receiver))
+        });
+        let driven = stream::iter(reading)
+            .then(|reading| reading)
+            .filter_map(|()| future::ready(None::<Result<eventsourcingdb::Event, ReadError>>));
+
+        Ok(stream::select(events, driven))
     }
 
     /// Checks an event the store has read: its hash, unless the store was
@@ -457,11 +500,9 @@ impl Store {
     /// Fails with [`ExecuteError::Decider`] if the decider refuses the command,
     /// with [`ExecuteError::Transient`], including a [`Transient::Conflict`]
     /// for a precondition that did not hold, or with
-    /// [`ExecuteError::Permanent`] if nothing was written, with
+    /// [`ExecuteError::Permanent`] if nothing was written, and with
     /// [`ExecuteError::OutcomeUnknown`] if the events may have been stored
-    /// nonetheless, and with [`ExecuteError::NotARevision`] for an ID of
-    /// [`Precondition::on_event_id`] that is not a revision. The preconditions
-    /// are checked before anything is read, as
+    /// nonetheless. The preconditions are checked before anything is read, as
     /// [`check_preconditions`](crate::check_preconditions) checks them.
     ///
     /// # Panics
@@ -536,8 +577,8 @@ impl Store {
             .map(|event| self.candidate(subject.clone(), event.event_type(), event.to_data()))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let preconditions = resolve_preconditions(&subject, declared, last_event_id.as_deref());
-        let doing = format!("writing {subject:?}");
+        let preconditions = resolve_preconditions(&subject, declared, last_event_id);
+        let doing = format!("writing {:?}", subject.as_str());
 
         Ok(self
             .write_candidates(candidates, preconditions, doing)
@@ -569,10 +610,9 @@ impl Store {
     ///
     /// Fails with [`WriteError::Transient`], including a
     /// [`Transient::Conflict`] for a precondition that did not hold, or with
-    /// [`WriteError::Permanent`] if the write certainly stored nothing, with
-    /// [`WriteError::OutcomeUnknown`] if it may have been stored nonetheless,
-    /// and with [`WriteError::NotARevision`] for an ID of
-    /// [`Precondition::on_event_id`] that is not a revision.
+    /// [`WriteError::Permanent`] if the write certainly stored nothing, and
+    /// with [`WriteError::OutcomeUnknown`] if it may have been stored
+    /// nonetheless.
     pub async fn write(
         &self,
         events: Vec<EventOn>,
@@ -586,30 +626,15 @@ impl Store {
         let doing = format!(
             "writing {} events, the first to {:?}",
             events.len(),
-            first.subject
+            first.subject.as_str()
         );
         let candidates = events
             .into_iter()
-            .enumerate()
-            .map(|(index, event)| self.candidate_for(index, event))
+            .map(|event| self.candidate(event.subject, event.event_type, event.data))
             .collect::<Result<Vec<_>, _>>()?;
 
         self.write_candidates(candidates, preconditions, doing)
             .await
-    }
-
-    /// Turns an event into what the client writes, with the source of the
-    /// store. Data that can not be written fails permanently, naming the event
-    /// type, the subject and the reason.
-    fn candidate_for(&self, index: usize, event: EventOn) -> Result<EventCandidate, Permanent> {
-        if event.subject.is_empty() {
-            return Err(Permanent::Other(Failure::new(
-                format!("event {index} of a write needs a subject"),
-                None,
-            )));
-        }
-
-        self.candidate(event.subject, event.event_type, event.data)
     }
 
     /// Turns the encoded data of an event of the given type into what the
@@ -618,16 +643,16 @@ impl Store {
     /// subject and the reason. Execute and write both encode with it.
     fn candidate(
         &self,
-        subject: String,
+        subject: Subject,
         event_type: &str,
         data: Result<Value, serde_json::Error>,
     ) -> Result<EventCandidate, Permanent> {
-        let data = data.map_err(|cause| unencodable(event_type, &subject, cause))?;
+        let data = data.map_err(|cause| unencodable(event_type, subject.as_str(), cause))?;
 
         Ok(EventCandidate {
             data,
             source: self.source.clone(),
-            subject,
+            subject: subject.into(),
             ty: event_type.to_owned(),
             traceinfo: None,
         })

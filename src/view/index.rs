@@ -120,9 +120,8 @@ where
     ///
     /// # Errors
     ///
-    /// Fails with [`ViewError::NotARevision`] if the ID of the event is not a
-    /// revision, and with [`ViewError::Permanent`] once the change changes the
-    /// key of an item, which keeps the items changed before.
+    /// Fails with [`ViewError::Permanent`] once the change changes the key of
+    /// an item, which keeps the items changed before.
     pub fn update<E, Q>(
         &self,
         value: &Q,
@@ -133,7 +132,7 @@ where
         V: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        let event = AppliedEvent::of(event)?;
+        let event = AppliedEvent::of(event);
 
         let mut entries = self.view.write();
         let keys = self.keys_of(&entries, value);
@@ -143,22 +142,18 @@ where
 
     /// Removes every item with the given value for which the event is newer,
     /// and reports how many it removed, like [`InMemoryView::delete_where`].
-    ///
-    /// # Errors
-    ///
-    /// Fails with [`ViewError::NotARevision`] if the ID of the event is not a
-    /// revision.
-    pub fn delete<E, Q>(&self, value: &Q, event: &Envelope<E>) -> Result<usize, ViewError>
+    /// Removing never fails.
+    pub fn delete<E, Q>(&self, value: &Q, event: &Envelope<E>) -> usize
     where
         V: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        let event = AppliedEvent::of(event)?;
+        let event = AppliedEvent::of(event);
 
         let mut entries = self.view.write();
         let keys = self.keys_of(&entries, value);
 
-        Ok(entries.delete_all(&keys, &event))
+        entries.delete_all(&keys, &event)
     }
 
     /// Returns the keys of the items with the given value, in the order of the

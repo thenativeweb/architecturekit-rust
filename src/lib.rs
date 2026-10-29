@@ -6,13 +6,15 @@
 //!
 //! ## Installation
 //!
-//! Add architecturekit and the client SDK for EventSourcingDB, together with serde to write and read the data of events, and Tokio to run it all:
+//! Add architecturekit, together with serde to write and read the data of events, and Tokio to run it all:
 //!
 //! ```shell
-//! cargo add architecturekit eventsourcingdb
+//! cargo add architecturekit
 //! cargo add serde --features derive
 //! cargo add tokio --features macros,rt-multi-thread
 //! ```
+//!
+//! architecturekit brings the client SDK for EventSourcingDB along as `architecturekit::eventsourcingdb`, and `ed25519_dalek` for verifying signatures as `architecturekit::ed25519_dalek`, so that their versions always fit. A new major version of the client SDK comes with a new major version of architecturekit.
 //!
 //! architecturekit needs Rust 1.88 or later. Its features are:
 //!
@@ -89,24 +91,24 @@
 //!
 //! ## Deciding on Commands
 //!
-//! A command names the subject whose state it is decided on, and the preconditions that its events are written with. `Precondition::on_state_read` writes them only if no other event has been written to the subject since its state was read, which is optimistic concurrency. A `SubjectScheme` builds subjects from values, and reads values from subjects:
+//! A command names the subject whose state it is decided on, and the preconditions that its events are written with. `Precondition::on_state_read` writes them only if no other event has been written to the subject since its state was read, which is optimistic concurrency. A `Subject` is a path that EventSourcingDB accepts, such as `/books/42`, and a `SubjectScheme` builds subjects from values, and reads values from subjects:
 //!
 //! ```rust
 //! use std::sync::LazyLock;
 //!
-//! use architecturekit::{Command, Precondition, SubjectScheme};
+//! use architecturekit::{Command, Precondition, Subject, SubjectScheme};
 //!
 //! static BOOKS: LazyLock<SubjectScheme> = LazyLock::new(|| SubjectScheme::new("/books/{book_id}"));
 //!
 //! #[derive(Clone)]
 //! struct BorrowBook {
-//!     book_id: String,
+//!     book: Subject,
 //!     reader: String,
 //! }
 //!
 //! impl Command for BorrowBook {
-//!     fn subject(&self) -> String {
-//!         BOOKS.build(&[&self.book_id])
+//!     fn subject(&self) -> Subject {
+//!         self.book.clone()
 //!     }
 //!
 //!     fn preconditions(&self) -> Vec<Precondition> {
@@ -142,9 +144,9 @@
 //! # static BOOKS: std::sync::LazyLock<architecturekit::SubjectScheme> =
 //! #     std::sync::LazyLock::new(|| architecturekit::SubjectScheme::new("/books/{book_id}"));
 //! # #[derive(Clone)]
-//! # struct BorrowBook { book_id: String, reader: String }
+//! # struct BorrowBook { book: architecturekit::Subject, reader: String }
 //! # impl architecturekit::Command for BorrowBook {
-//! #     fn subject(&self) -> String { BOOKS.build(&[&self.book_id]) }
+//! #     fn subject(&self) -> architecturekit::Subject { self.book.clone() }
 //! #     fn preconditions(&self) -> Vec<architecturekit::Precondition> {
 //! #         vec![architecturekit::Precondition::on_state_read()]
 //! #     }
@@ -154,10 +156,10 @@
 //! fn borrow_book() -> Decider<BorrowBook, Book, DomainError> {
 //!     Decider::new(|command: BorrowBook, book: Book| async move {
 //!         if !book.is_acquired {
-//!             return Err(DomainError::new(format!("book {} does not exist", command.book_id)));
+//!             return Err(DomainError::new(format!("{} does not exist", command.book)));
 //!         }
 //!         if book.is_borrowed {
-//!             return Err(DomainError::new(format!("book {} is already borrowed", command.book_id)));
+//!             return Err(DomainError::new(format!("{} is already borrowed", command.book)));
 //!         }
 //!
 //!         Ok(vec![BookEvent::Borrowed(BookBorrowed { reader: command.reader })])
@@ -198,9 +200,9 @@
 //! # static BOOKS: std::sync::LazyLock<architecturekit::SubjectScheme> =
 //! #     std::sync::LazyLock::new(|| architecturekit::SubjectScheme::new("/books/{book_id}"));
 //! # #[derive(Clone)]
-//! # struct BorrowBook { book_id: String, reader: String }
+//! # struct BorrowBook { book: architecturekit::Subject, reader: String }
 //! # impl architecturekit::Command for BorrowBook {
-//! #     fn subject(&self) -> String { BOOKS.build(&[&self.book_id]) }
+//! #     fn subject(&self) -> architecturekit::Subject { self.book.clone() }
 //! #     fn preconditions(&self) -> Vec<architecturekit::Precondition> {
 //! #         vec![architecturekit::Precondition::on_state_read()]
 //! #     }
@@ -209,16 +211,15 @@
 //! # fn borrow_book() -> architecturekit::Decider<BorrowBook, Book, architecturekit::DomainError> {
 //! #     architecturekit::Decider::new(|command: BorrowBook, book: Book| async move {
 //! #         if !book.is_acquired {
-//! #             return Err(architecturekit::DomainError::new(format!("book {} does not exist", command.book_id)));
+//! #             return Err(architecturekit::DomainError::new(format!("{} does not exist", command.book)));
 //! #         }
 //! #         if book.is_borrowed {
-//! #             return Err(architecturekit::DomainError::new(format!("book {} is already borrowed", command.book_id)));
+//! #             return Err(architecturekit::DomainError::new(format!("{} is already borrowed", command.book)));
 //! #         }
 //! #         Ok(vec![BookEvent::Borrowed(BookBorrowed { reader: command.reader })])
 //! #     })
 //! # }
-//! use architecturekit::Store;
-//! use eventsourcingdb::Client;
+//! use architecturekit::{Store, eventsourcingdb::Client};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -226,7 +227,7 @@
 //!     let store = Store::builder(client, "https://library.eventsourcingdb.io").build();
 //!     store.register_schemas(BookEvent::schemas()).await?;
 //!
-//!     let command = BorrowBook { book_id: "42".to_owned(), reader: "Jane".to_owned() };
+//!     let command = BorrowBook { book: BOOKS.build(&["42"]), reader: "Jane".to_owned() };
 //!     let written = store.execute(&borrow_book(), command).await?;
 //!     println!("borrowed with {} event(s)", written.len());
 //!
@@ -265,14 +266,14 @@
 //! # static BOOKS: std::sync::LazyLock<architecturekit::SubjectScheme> =
 //! #     std::sync::LazyLock::new(|| architecturekit::SubjectScheme::new("/books/{book_id}"));
 //! # #[derive(Clone)]
-//! # struct BorrowBook { book_id: String, reader: String }
+//! # struct BorrowBook { book: architecturekit::Subject, reader: String }
 //! # impl architecturekit::Command for BorrowBook {
-//! #     fn subject(&self) -> String { BOOKS.build(&[&self.book_id]) }
+//! #     fn subject(&self) -> architecturekit::Subject { self.book.clone() }
 //! #     fn preconditions(&self) -> Vec<architecturekit::Precondition> {
 //! #         vec![architecturekit::Precondition::on_state_read()]
 //! #     }
 //! # }
-//! use architecturekit::{Envelope, InMemoryView, Projection, ViewError};
+//! use architecturekit::{Envelope, InMemoryView, Projection, Revision, ViewError};
 //! use serde::Serialize;
 //!
 //! #[derive(Clone, Default, Serialize)]
@@ -312,7 +313,7 @@
 //!         Ok(())
 //!     }
 //!
-//!     fn seen(&self, event_id: &str) {
+//!     fn seen(&self, event_id: Revision) {
 //!         self.books.seen(event_id);
 //!     }
 //! }
@@ -347,9 +348,9 @@
 //! # static BOOKS: std::sync::LazyLock<architecturekit::SubjectScheme> =
 //! #     std::sync::LazyLock::new(|| architecturekit::SubjectScheme::new("/books/{book_id}"));
 //! # #[derive(Clone)]
-//! # struct BorrowBook { book_id: String, reader: String }
+//! # struct BorrowBook { book: architecturekit::Subject, reader: String }
 //! # impl architecturekit::Command for BorrowBook {
-//! #     fn subject(&self) -> String { BOOKS.build(&[&self.book_id]) }
+//! #     fn subject(&self) -> architecturekit::Subject { self.book.clone() }
 //! #     fn preconditions(&self) -> Vec<architecturekit::Precondition> {
 //! #         vec![architecturekit::Precondition::on_state_read()]
 //! #     }
@@ -377,7 +378,7 @@
 //! #         }
 //! #         Ok(())
 //! #     }
-//! #     fn seen(&self, event_id: &str) { self.books.seen(event_id); }
+//! #     fn seen(&self, event_id: architecturekit::Revision) { self.books.seen(event_id); }
 //! # }
 //! # async fn example(store: architecturekit::Store) -> Result<(), Box<dyn std::error::Error>> {
 //! use std::sync::Arc;
@@ -390,7 +391,7 @@
 //! let token = CancellationToken::new();
 //!
 //! let run = store.start_projection(
-//!     Subjects::tree("/books"),
+//!     Subjects::tree(BOOKS.root()),
 //!     Arc::clone(&book_list),
 //!     token.clone(),
 //!     ProjectionOptions::named("book list"),
@@ -443,9 +444,9 @@
 //! # static BOOKS: std::sync::LazyLock<architecturekit::SubjectScheme> =
 //! #     std::sync::LazyLock::new(|| architecturekit::SubjectScheme::new("/books/{book_id}"));
 //! # #[derive(Clone)]
-//! # struct BorrowBook { book_id: String, reader: String }
+//! # struct BorrowBook { book: architecturekit::Subject, reader: String }
 //! # impl architecturekit::Command for BorrowBook {
-//! #     fn subject(&self) -> String { BOOKS.build(&[&self.book_id]) }
+//! #     fn subject(&self) -> architecturekit::Subject { self.book.clone() }
 //! #     fn preconditions(&self) -> Vec<architecturekit::Precondition> {
 //! #         vec![architecturekit::Precondition::on_state_read()]
 //! #     }
@@ -454,10 +455,10 @@
 //! # fn borrow_book() -> architecturekit::Decider<BorrowBook, Book, architecturekit::DomainError> {
 //! #     architecturekit::Decider::new(|command: BorrowBook, book: Book| async move {
 //! #         if !book.is_acquired {
-//! #             return Err(architecturekit::DomainError::new(format!("book {} does not exist", command.book_id)));
+//! #             return Err(architecturekit::DomainError::new(format!("{} does not exist", command.book)));
 //! #         }
 //! #         if book.is_borrowed {
-//! #             return Err(architecturekit::DomainError::new(format!("book {} is already borrowed", command.book_id)));
+//! #             return Err(architecturekit::DomainError::new(format!("{} is already borrowed", command.book)));
 //! #         }
 //! #         Ok(vec![BookEvent::Borrowed(BookBorrowed { reader: command.reader })])
 //! #     })
@@ -485,7 +486,7 @@
 //! #         }
 //! #         Ok(())
 //! #     }
-//! #     fn seen(&self, event_id: &str) { self.books.seen(event_id); }
+//! #     fn seen(&self, event_id: architecturekit::Revision) { self.books.seen(event_id); }
 //! # }
 //! use std::sync::Arc;
 //!
@@ -510,7 +511,7 @@
 //!     Path(book_id): Path<String>,
 //!     Strict(request): Strict<BorrowRequest>,
 //! ) -> Result<CommandAnswer, HttpError> {
-//!     let command = BorrowBook { book_id, reader: request.reader };
+//!     let command = BorrowBook { book: BOOKS.try_build(&[&book_id])?, reader: request.reader };
 //!     let written = app.store.execute(&app.borrow_book, command).await?;
 //!
 //!     Ok(CommandAnswer::new(&written))
@@ -518,10 +519,11 @@
 //! # }
 //! ```
 //!
-//! `Strict` reads the body as JSON, and refuses a body that does not fit, also because of a field that the type does not have, with 400 and what is wrong, such as `{"message":"malformed request: unknown field \"raeder\""}`. A command that has succeeded is answered with the revision it wrote, such as `{"revision":"42"}`. Every error of architecturekit turns into an `HttpError` with `?`, which answers it by its category:
+//! `Strict` reads the body as JSON, and refuses a body that does not fit, also because of a field that the type does not have, with 400 and what is wrong, such as `{"message":"malformed request: unknown field \"raeder\""}`. `SubjectScheme::try_build` refuses an ID that can not be part of a subject, such as `a.b`, which `?` answers with 400 as well, where `build` would panic. A command that has succeeded is answered with the revision it wrote, such as `{"revision":"42"}`. Every error of architecturekit turns into an `HttpError` with `?`, which answers it by its category:
 //!
 //! | Failure | Status | Message |
 //! |---|---|---|
+//! | an ID that can not be part of a subject | 400 | its own |
 //! | a refusal of the decider | 422 | its own |
 //! | a conflict | 409 | `conflict: the data has changed since it was read` |
 //! | another transient failure | 503 | `internal server error` |
@@ -561,9 +563,9 @@
 //! # static BOOKS: std::sync::LazyLock<architecturekit::SubjectScheme> =
 //! #     std::sync::LazyLock::new(|| architecturekit::SubjectScheme::new("/books/{book_id}"));
 //! # #[derive(Clone)]
-//! # struct BorrowBook { book_id: String, reader: String }
+//! # struct BorrowBook { book: architecturekit::Subject, reader: String }
 //! # impl architecturekit::Command for BorrowBook {
-//! #     fn subject(&self) -> String { BOOKS.build(&[&self.book_id]) }
+//! #     fn subject(&self) -> architecturekit::Subject { self.book.clone() }
 //! #     fn preconditions(&self) -> Vec<architecturekit::Precondition> {
 //! #         vec![architecturekit::Precondition::on_state_read()]
 //! #     }
@@ -572,10 +574,10 @@
 //! # fn borrow_book() -> architecturekit::Decider<BorrowBook, Book, architecturekit::DomainError> {
 //! #     architecturekit::Decider::new(|command: BorrowBook, book: Book| async move {
 //! #         if !book.is_acquired {
-//! #             return Err(architecturekit::DomainError::new(format!("book {} does not exist", command.book_id)));
+//! #             return Err(architecturekit::DomainError::new(format!("{} does not exist", command.book)));
 //! #         }
 //! #         if book.is_borrowed {
-//! #             return Err(architecturekit::DomainError::new(format!("book {} is already borrowed", command.book_id)));
+//! #             return Err(architecturekit::DomainError::new(format!("{} is already borrowed", command.book)));
 //! #         }
 //! #         Ok(vec![BookEvent::Borrowed(BookBorrowed { reader: command.reader })])
 //! #     })
@@ -603,7 +605,7 @@
 //! #         }
 //! #         Ok(())
 //! #     }
-//! #     fn seen(&self, event_id: &str) { self.books.seen(event_id); }
+//! #     fn seen(&self, event_id: architecturekit::Revision) { self.books.seen(event_id); }
 //! # }
 //! # use std::sync::Arc;
 //! #
@@ -628,7 +630,7 @@
 //! #     Path(book_id): Path<String>,
 //! #     Strict(request): Strict<BorrowRequest>,
 //! # ) -> Result<CommandAnswer, HttpError> {
-//! #     let command = BorrowBook { book_id, reader: request.reader };
+//! #     let command = BorrowBook { book: BOOKS.try_build(&[&book_id])?, reader: request.reader };
 //! #     let written = app.store.execute(&app.borrow_book, command).await?;
 //! #
 //! #     Ok(CommandAnswer::new(&written))
@@ -692,9 +694,9 @@
 //! # static BOOKS: std::sync::LazyLock<architecturekit::SubjectScheme> =
 //! #     std::sync::LazyLock::new(|| architecturekit::SubjectScheme::new("/books/{book_id}"));
 //! # #[derive(Clone)]
-//! # struct BorrowBook { book_id: String, reader: String }
+//! # struct BorrowBook { book: architecturekit::Subject, reader: String }
 //! # impl architecturekit::Command for BorrowBook {
-//! #     fn subject(&self) -> String { BOOKS.build(&[&self.book_id]) }
+//! #     fn subject(&self) -> architecturekit::Subject { self.book.clone() }
 //! #     fn preconditions(&self) -> Vec<architecturekit::Precondition> {
 //! #         vec![architecturekit::Precondition::on_state_read()]
 //! #     }
@@ -703,10 +705,10 @@
 //! # fn borrow_book() -> architecturekit::Decider<BorrowBook, Book, architecturekit::DomainError> {
 //! #     architecturekit::Decider::new(|command: BorrowBook, book: Book| async move {
 //! #         if !book.is_acquired {
-//! #             return Err(architecturekit::DomainError::new(format!("book {} does not exist", command.book_id)));
+//! #             return Err(architecturekit::DomainError::new(format!("{} does not exist", command.book)));
 //! #         }
 //! #         if book.is_borrowed {
-//! #             return Err(architecturekit::DomainError::new(format!("book {} is already borrowed", command.book_id)));
+//! #             return Err(architecturekit::DomainError::new(format!("{} is already borrowed", command.book)));
 //! #         }
 //! #         Ok(vec![BookEvent::Borrowed(BookBorrowed { reader: command.reader })])
 //! #     })
@@ -734,7 +736,7 @@
 //! #         }
 //! #         Ok(())
 //! #     }
-//! #     fn seen(&self, event_id: &str) { self.books.seen(event_id); }
+//! #     fn seen(&self, event_id: architecturekit::Revision) { self.books.seen(event_id); }
 //! # }
 //! # use std::sync::Arc;
 //! #
@@ -759,7 +761,7 @@
 //! #     Path(book_id): Path<String>,
 //! #     Strict(request): Strict<BorrowRequest>,
 //! # ) -> Result<CommandAnswer, HttpError> {
-//! #     let command = BorrowBook { book_id, reader: request.reader };
+//! #     let command = BorrowBook { book: BOOKS.try_build(&[&book_id])?, reader: request.reader };
 //! #     let written = app.store.execute(&app.borrow_book, command).await?;
 //! #
 //! #     Ok(CommandAnswer::new(&written))
@@ -848,9 +850,9 @@
 //! # static BOOKS: std::sync::LazyLock<architecturekit::SubjectScheme> =
 //! #     std::sync::LazyLock::new(|| architecturekit::SubjectScheme::new("/books/{book_id}"));
 //! # #[derive(Clone)]
-//! # struct BorrowBook { book_id: String, reader: String }
+//! # struct BorrowBook { book: architecturekit::Subject, reader: String }
 //! # impl architecturekit::Command for BorrowBook {
-//! #     fn subject(&self) -> String { BOOKS.build(&[&self.book_id]) }
+//! #     fn subject(&self) -> architecturekit::Subject { self.book.clone() }
 //! #     fn preconditions(&self) -> Vec<architecturekit::Precondition> {
 //! #         vec![architecturekit::Precondition::on_state_read()]
 //! #     }
@@ -859,10 +861,10 @@
 //! # fn borrow_book() -> architecturekit::Decider<BorrowBook, Book, architecturekit::DomainError> {
 //! #     architecturekit::Decider::new(|command: BorrowBook, book: Book| async move {
 //! #         if !book.is_acquired {
-//! #             return Err(architecturekit::DomainError::new(format!("book {} does not exist", command.book_id)));
+//! #             return Err(architecturekit::DomainError::new(format!("{} does not exist", command.book)));
 //! #         }
 //! #         if book.is_borrowed {
-//! #             return Err(architecturekit::DomainError::new(format!("book {} is already borrowed", command.book_id)));
+//! #             return Err(architecturekit::DomainError::new(format!("{} is already borrowed", command.book)));
 //! #         }
 //! #         Ok(vec![BookEvent::Borrowed(BookBorrowed { reader: command.reader })])
 //! #     })
@@ -882,9 +884,9 @@
 //!         BookEvent::Borrowed(BookBorrowed { reader: "Jane".to_owned() }),
 //!     ],
 //! )
-//! .when(BorrowBook { book_id: "42".to_owned(), reader: "John".to_owned() })
+//! .when(BorrowBook { book: BOOKS.build(&["42"]), reader: "John".to_owned() })
 //! .await
-//! .then_failed(DomainError::new("book 42 is already borrowed"));
+//! .then_failed(DomainError::new("/books/42 is already borrowed"));
 //! # });
 //! # }
 //! ```
@@ -922,9 +924,9 @@
 //! # static BOOKS: std::sync::LazyLock<architecturekit::SubjectScheme> =
 //! #     std::sync::LazyLock::new(|| architecturekit::SubjectScheme::new("/books/{book_id}"));
 //! # #[derive(Clone)]
-//! # struct BorrowBook { book_id: String, reader: String }
+//! # struct BorrowBook { book: architecturekit::Subject, reader: String }
 //! # impl architecturekit::Command for BorrowBook {
-//! #     fn subject(&self) -> String { BOOKS.build(&[&self.book_id]) }
+//! #     fn subject(&self) -> architecturekit::Subject { self.book.clone() }
 //! #     fn preconditions(&self) -> Vec<architecturekit::Precondition> {
 //! #         vec![architecturekit::Precondition::on_state_read()]
 //! #     }
@@ -952,7 +954,7 @@
 //! #         }
 //! #         Ok(())
 //! #     }
-//! #     fn seen(&self, event_id: &str) { self.books.seen(event_id); }
+//! #     fn seen(&self, event_id: architecturekit::Revision) { self.books.seen(event_id); }
 //! # }
 //! # #[cfg(feature = "testing")]
 //! # {
@@ -967,7 +969,7 @@
 //! project(
 //!     &book_list,
 //!     &stored_events(
-//!         "/books/42",
+//!         &BOOKS.build(&["42"]),
 //!         [BookEvent::Acquired(BookAcquired { title: "2001".to_owned(), author: "Arthur C. Clarke".to_owned() })],
 //!     ),
 //! )
@@ -1039,8 +1041,7 @@ pub use read::{
     UpperBound, check_read_options,
 };
 pub use revision::{
-    NotARevision, NotCaughtUp, Revisioned, compare_revisions, parse_revision, revision_of,
-    wait_for_written,
+    NotARevision, NotCaughtUp, Revision, Revisioned, revision_of, wait_for_written,
 };
 pub use schema::Schema;
 pub use state::{EventSchema, Events, State, replay, replay_stored, step, step_stored};
@@ -1048,12 +1049,23 @@ pub use store::{
     Error, EventOn, ExecuteError, LoadError, ReadError, RegisterSchemasError, Store, StoreBuilder,
     WriteError,
 };
-pub use subject::{SubjectScheme, SubjectValuesError};
+pub use subject::{NotASubject, Subject, SubjectScheme, SubjectValuesError};
 pub use upcast::{UpcastEvent, Upcasters};
 pub use view::{InMemoryIndex, InMemoryView, KeyedView, Outcome, View, ViewError};
 
 /// Stops a run of a projection from outside (see [`Store::start_projection`]).
 pub use tokio_util::sync::CancellationToken;
+
+/// The client SDK for EventSourcingDB, whose types the kit takes and hands out,
+/// such as the [`Client`](eventsourcingdb::Client) that [`Store::builder`]
+/// takes. Use it through the kit, so that its version always fits the one of
+/// the kit: a new major version of the client SDK comes with a new major
+/// version of the kit.
+pub use eventsourcingdb;
+
+/// The crate of the key that [`StoreBuilder::signature_verification`] takes,
+/// in the version the client SDK verifies signatures with.
+pub use ed25519_dalek;
 
 #[cfg(feature = "derive")]
 pub use architecturekit_macros::{Event, Events, Schema};

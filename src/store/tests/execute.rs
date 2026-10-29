@@ -28,11 +28,12 @@ use super::{
     },
     database::{Database, subject_for},
     fake::{Api, Fake, Requests, dead_client},
+    revision_of_event,
 };
 use crate::{
     Categorized, Category, Decider, DomainError, Error, Event, EventOn, Events, ExecuteError,
-    Precondition, State, Store, Transient, UpcastEvent, Upcasters, WriteError, check_preconditions,
-    revision::tests::NOT_REVISIONS,
+    Precondition, Revision, State, Store, Subject, Transient, UpcastEvent, Upcasters, WriteError,
+    check_preconditions,
 };
 
 /// A store of a fake that answers every request with an empty result, and the
@@ -501,111 +502,11 @@ async fn reports_a_failing_upcaster() {
 // Event IDs of the caller.
 
 #[tokio::test]
-async fn refuses_an_event_id_that_is_not_a_revision_before_reading_or_writing() {
-    for (name, id) in [("an empty one", "")].into_iter().chain(NOT_REVISIONS) {
-        let (store, requests) = unasked().await;
-        let on_event_id = move || vec![Precondition::on_event_id("/books/42", id)];
-
-        let executed = store
-            .execute(
-                &counter_decider(),
-                Increment::new("/books/42", 1).declaring(on_event_id),
-            )
-            .await
-            .expect_err(name);
-        let written = store
-            .write(
-                vec![EventOn::new("/books/42", &Incremented { by: 1 })],
-                on_event_id(),
-            )
-            .await
-            .expect_err(name);
-
-        assert!(
-            matches!(executed, ExecuteError::NotARevision(_)),
-            "{name}: {executed:?}"
-        );
-        assert!(
-            matches!(written, WriteError::NotARevision(_)),
-            "{name}: {written:?}"
-        );
-        assert_eq!(
-            executed.category(),
-            None,
-            "{name}: the ID is the mistake of the caller"
-        );
-        assert_eq!(
-            executed.to_string(),
-            format!("not a revision: {id:?}"),
-            "{name}: the text is for the caller, who knows neither the subject nor the command",
-        );
-        assert_eq!(written.to_string(), executed.to_string(), "{name}");
-        assert_eq!(requests.count(), 0, "{name}: the database is not asked");
-    }
-}
-
-#[tokio::test]
-async fn refuses_it_with_the_same_error_as_check_preconditions_and_write() {
-    let (store, _) = unasked().await;
-    let on_event_id = || vec![Precondition::on_event_id("/books/42", "abc")];
-    let command = Increment::new("/books/42", 1).declaring(on_event_id);
-
-    let executed = store
-        .execute(&counter_decider(), command.clone())
-        .await
-        .expect_err("abc is not a revision");
-    let checked = check_preconditions(&command).expect_err("abc is not a revision");
-    let written = store
-        .write(Vec::new(), on_event_id())
-        .await
-        .expect_err("write checks the preconditions also for no events");
-
-    assert!(
-        matches!(executed, ExecuteError::NotARevision(_)),
-        "{executed:?}"
-    );
-    assert_eq!(executed.to_string(), checked.to_string());
-    assert_eq!(executed.to_string(), written.to_string());
-}
-
-#[tokio::test]
-async fn refuses_the_first_id_that_is_not_a_revision() {
-    let (store, requests) = unasked().await;
-    let preconditions = || {
-        vec![
-            Precondition::on_event_id("/books/42", "7"),
-            Precondition::on_populated_subject("/books/42"),
-            Precondition::on_event_id("/books/23", "abc"),
-            Precondition::on_event_id("/books/42", "xyz"),
-        ]
-    };
-
-    let executed = store
-        .execute(
-            &counter_decider(),
-            Increment::new("/books/42", 1).declaring(preconditions),
-        )
-        .await
-        .expect_err("abc is not a revision");
-    let written = store
-        .write(
-            vec![EventOn::new("/books/42", &Incremented { by: 1 })],
-            preconditions(),
-        )
-        .await
-        .expect_err("abc is not a revision");
-
-    assert_eq!(executed.to_string(), r#"not a revision: "abc""#);
-    assert_eq!(written.to_string(), r#"not a revision: "abc""#);
-    assert_eq!(requests.count(), 0, "the database is not asked");
-}
-
-#[tokio::test]
-async fn reports_a_mistake_in_the_code_before_an_id_that_is_not_a_revision() {
+async fn reports_a_mistake_in_the_code_around_an_event_id_without_asking_the_database() {
     let (store, requests) = unasked().await;
     let combined = || {
         vec![
-            Precondition::on_event_id("/books/42", "abc"),
+            Precondition::on_event_id(Subject::new("/books/42"), Revision::from(7)),
             Precondition::unconditionally(),
         ]
     };
@@ -627,7 +528,10 @@ async fn reports_a_mistake_in_the_code_before_an_id_that_is_not_a_revision() {
             "write, with unconditionally combined with it",
             store
                 .write(
-                    vec![EventOn::new("/books/42", &Incremented { by: 1 })],
+                    vec![EventOn::new(
+                        Subject::new("/books/42"),
+                        &Incremented { by: 1 },
+                    )],
                     combined(),
                 )
                 .await
@@ -639,9 +543,12 @@ async fn reports_a_mistake_in_the_code_before_an_id_that_is_not_a_revision() {
             "write, with on_state_read after it",
             store
                 .write(
-                    vec![EventOn::new("/books/42", &Incremented { by: 1 })],
+                    vec![EventOn::new(
+                        Subject::new("/books/42"),
+                        &Incremented { by: 1 },
+                    )],
                     vec![
-                        Precondition::on_event_id("/books/42", "abc"),
+                        Precondition::on_event_id(Subject::new("/books/42"), Revision::from(7)),
                         Precondition::on_state_read(),
                     ],
                 )
@@ -667,17 +574,16 @@ async fn lets_the_database_check_an_id_that_is_a_revision() {
     let database = Database::start().await;
     let store = database.store().await;
     let subject = subject_for("execute-revision");
-    let on = |event_id: &str| {
+    let on = |event_id: Revision| {
         let subject = subject.clone();
-        let event_id = event_id.to_owned();
-        move || vec![Precondition::on_event_id(subject.clone(), event_id.clone())]
+        move || vec![Precondition::on_event_id(subject.clone(), event_id)]
     };
 
     let seeded = store
         .write(
             vec![
-                EventOn::new(&subject, &Incremented { by: 1 }),
-                EventOn::new(&subject, &Incremented { by: 2 }),
+                EventOn::new(subject.clone(), &Incremented { by: 1 }),
+                EventOn::new(subject.clone(), &Incremented { by: 2 }),
             ],
             vec![Precondition::unconditionally()],
         )
@@ -685,8 +591,14 @@ async fn lets_the_database_check_an_id_that_is_a_revision() {
         .expect("the events are written");
 
     for (name, event_id) in [
-        ("a revision that is not the last event", seeded[0].id()),
-        ("the largest revision", "9223372036854775807"),
+        (
+            "a revision that is not the last event",
+            revision_of_event(&seeded[0]),
+        ),
+        (
+            "the largest revision",
+            Revision::try_from((1_u64 << 63) - 1).expect("it is the largest revision"),
+        ),
     ] {
         let failure = store
             .execute(
@@ -703,8 +615,8 @@ async fn lets_the_database_check_an_id_that_is_a_revision() {
 
     let failure = store
         .write(
-            vec![EventOn::new(&subject, &Incremented { by: 1 })],
-            on(seeded[0].id())(),
+            vec![EventOn::new(subject.clone(), &Incremented { by: 1 })],
+            on(revision_of_event(&seeded[0]))(),
         )
         .await
         .expect_err("a revision that is not the last event conflicts");
@@ -716,14 +628,14 @@ async fn lets_the_database_check_an_id_that_is_a_revision() {
     let executed = store
         .execute(
             &counter_decider(),
-            Increment::new(&subject, 4).declaring(on(seeded[1].id())),
+            Increment::new(&subject, 4).declaring(on(revision_of_event(&seeded[1]))),
         )
         .await
         .expect("the last event is the one to be on");
     let _ = store
         .write(
-            vec![EventOn::new(&subject, &Incremented { by: 8 })],
-            on(executed[0].id())(),
+            vec![EventOn::new(subject.clone(), &Incremented { by: 8 })],
+            on(revision_of_event(&executed[0]))(),
         )
         .await
         .expect("the last event is the one to be on");
@@ -844,8 +756,9 @@ async fn refuses_data_that_can_not_be_encoded_as_permanent_and_writes_nothing() 
         assert_eq!(
             failure.to_string(),
             format!(
-                "permanent failure: refusing to write an event of type {event_type:?} to {subject:?}, \
-                 since its data can not be encoded as JSON"
+                "permanent failure: refusing to write an event of type {event_type:?} to {:?}, \
+                 since its data can not be encoded as JSON",
+                subject.as_str(),
             ),
             "{name}: the failure names the event type and the subject",
         );
@@ -881,7 +794,7 @@ async fn writes_none_of_the_events_if_the_second_can_not_be_encoded() {
         assert!(
             failure
                 .to_string()
-                .contains(&format!("{event_type:?} to {subject:?}")),
+                .contains(&format!("{event_type:?} to {:?}", subject.as_str())),
             "{name}: {failure}"
         );
         assert_eq!(
@@ -897,8 +810,10 @@ async fn writes_none_of_the_events_if_the_second_can_not_be_encoded() {
 /// Lets the events be written only if neither the subject nor any subject
 /// below it has events yet, which only a database that offers the v2 API can
 /// check.
-fn recursively_pristine(subject: &str) -> impl Fn() -> Vec<Precondition> + Send + Sync + 'static {
-    let subject = subject.to_owned();
+fn recursively_pristine(
+    subject: &Subject,
+) -> impl Fn() -> Vec<Precondition> + Send + Sync + 'static {
+    let subject = subject.clone();
     move || {
         vec![Precondition::require(
             eventsourcingdb::Precondition::is_subject_pristine(
@@ -936,7 +851,12 @@ async fn fails_permanently_without_sending_a_write_the_database_does_not_support
         let store = Store::builder(Client::new(url, "secret"), SOURCE).build();
 
         let failure = write
-            .remark(&store, "/test", "a remark", recursively_pristine("/test"))
+            .remark(
+                &store,
+                &Subject::new("/test"),
+                "a remark",
+                recursively_pristine(&Subject::new("/test")),
+            )
             .await
             .expect_err("the database offers just the v1 API");
 

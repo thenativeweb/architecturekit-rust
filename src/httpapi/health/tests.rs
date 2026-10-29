@@ -3,17 +3,14 @@
 // a database, since how a run gets into a phase is part of the tests of the
 // projections. Health owns its runs, so they can not change afterwards.
 
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::sync::Arc;
 
-use chrono::DateTime;
+use chrono::Utc;
 use http::{StatusCode, header};
 use serde_json::{Value, json};
 
-use super::{Health, time_of};
-use crate::{Phase, ProjectionError, ProjectionOptions, ProjectionRun, ProjectionStatus};
+use super::Health;
+use crate::{Phase, ProjectionError, ProjectionOptions, ProjectionRun, ProjectionStatus, Revision};
 
 fn run(name: &str) -> ProjectionRun {
     ProjectionRun::new(ProjectionOptions::named(name))
@@ -157,7 +154,7 @@ fn answers_with_json_that_must_not_be_cached() {
 #[test]
 fn tells_where_each_projection_stands_but_not_why() {
     let run = live("catalog");
-    run.committed("42");
+    run.committed(Revision::from(42));
     run.disrupted(unreachable());
     let since = run.status().since;
 
@@ -168,7 +165,7 @@ fn tells_where_each_projection_stands_but_not_why() {
         body["projections"]["catalog"],
         json!({
             "phase": "reconnecting",
-            "since": time_of(since),
+            "since": since,
             "hasCaughtUp": true,
             "attempts": 1,
             "revision": "42",
@@ -186,22 +183,6 @@ fn tells_a_projection_that_has_committed_nothing_by_an_empty_revision() {
 
     assert_eq!(body["projections"]["catalog"]["phase"], "catching-up");
     assert_eq!(body["projections"]["catalog"]["revision"], "");
-}
-
-#[test]
-fn writes_times_as_rfc_3339_does() {
-    let time = UNIX_EPOCH + Duration::new(1_793_188_800, 500_000_000);
-
-    assert_eq!(
-        json!(time_of(time)),
-        json!("2026-10-28T12:00:00.500Z"),
-        "a time is written in UTC"
-    );
-    assert_eq!(
-        time_of(UNIX_EPOCH - Duration::from_secs(1)),
-        DateTime::UNIX_EPOCH,
-        "a time before 1970 is written as 1970"
-    );
 }
 
 #[test]
@@ -278,7 +259,7 @@ fn judges_every_phase() {
     for (name, phase, has_caught_up, is_ready, is_alive) in verdicts {
         let status = ProjectionStatus {
             phase,
-            since: SystemTime::now(),
+            since: Utc::now(),
             error: None,
             attempts: 0,
             revision: None,

@@ -1,6 +1,8 @@
-use std::{cmp::Ordering, error::Error, fmt, future::Future, time::Duration};
+use std::{error::Error, fmt, future::Future, str::FromStr, time::Duration};
 
-use crate::{Categorized, Category};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+
+use crate::{Categorized, Category, Failure, Permanent};
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -8,6 +10,132 @@ pub(crate) mod tests;
 /// The largest event ID EventSourcingDB hands out, since it numbers its
 /// events with signed 64-bit integers.
 const LARGEST_REVISION: u64 = (1 << 63) - 1;
+
+/// A revision, which is the ID of an event of EventSourcingDB: a number from 0
+/// to 2^63-1, since the database numbers its events with signed 64-bit
+/// integers, as one ascending sequence across all subjects. Revisions sort as
+/// numbers, so that 10 comes after 9, and a value that is no event ID can not
+/// be a revision at all.
+///
+/// A revision that comes from outside, such as an event ID in a request, is
+/// read from its text with `parse`, or from a number with `try_from`. A `u32`
+/// always fits, so a revision is made from one with `from`, as a test does. A
+/// revision is written as its decimal, also by serde, which writes and reads
+/// it as a string, as the database does:
+///
+/// ```
+/// use architecturekit::Revision;
+///
+/// let revision: Revision = "42".parse()?;
+///
+/// assert_eq!(revision, Revision::from(42));
+/// assert_eq!(revision.get(), 42);
+/// assert_eq!(revision.to_string(), "42");
+/// assert!(Revision::from(9) < Revision::from(10));
+/// assert!("4 2".parse::<Revision>().is_err());
+/// # Ok::<(), architecturekit::NotARevision>(())
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Revision(u64);
+
+impl Revision {
+    /// Returns the revision as a number.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Every `u32` is an event ID, so this never fails.
+impl From<u32> for Revision {
+    fn from(number: u32) -> Self {
+        Self(u64::from(number))
+    }
+}
+
+/// Takes a number as a revision.
+///
+/// # Errors
+///
+/// Fails with [`NotARevision`] for a number beyond 2^63-1.
+impl TryFrom<u64> for Revision {
+    type Error = NotARevision;
+
+    fn try_from(number: u64) -> Result<Self, NotARevision> {
+        if number > LARGEST_REVISION {
+            return Err(NotARevision {
+                revision: number.to_string(),
+            });
+        }
+
+        Ok(Self(number))
+    }
+}
+
+/// Reads a revision from its decimal, written with digits only, possibly with
+/// leading zeros.
+///
+/// # Errors
+///
+/// Fails with [`NotARevision`] for anything else, including the empty string,
+/// a sign, spaces, and a number beyond 2^63-1.
+impl FromStr for Revision {
+    type Err = NotARevision;
+
+    fn from_str(revision: &str) -> Result<Self, NotARevision> {
+        let refused = || NotARevision {
+            revision: revision.to_owned(),
+        };
+
+        // u64::from_str would take a leading plus sign as well.
+        if revision.is_empty() || !revision.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(refused());
+        }
+
+        match revision.parse::<u64>() {
+            Ok(number) if number <= LARGEST_REVISION => Ok(Self(number)),
+            _ => Err(refused()),
+        }
+    }
+}
+
+/// Writes the revision as its decimal.
+impl fmt::Display for Revision {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, formatter)
+    }
+}
+
+/// Writes the revision as a string of its decimal, as the database writes an
+/// event ID.
+impl Serialize for Revision {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+/// Reads the revision from a string, as [`parse`](str::parse) does, and fails
+/// with the text of [`NotARevision`] for a string that is not one.
+impl<'de> Deserialize<'de> for Revision {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_str(RevisionVisitor)
+    }
+}
+
+/// Reads a revision from a string for serde.
+struct RevisionVisitor;
+
+impl de::Visitor<'_> for RevisionVisitor {
+    type Value = Revision;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a revision, which is a string of a decimal from 0 to 2^63-1")
+    }
+
+    fn visit_str<E: de::Error>(self, revision: &str) -> Result<Revision, E> {
+        revision.parse().map_err(E::custom)
+    }
+}
 
 /// A value that was meant to be a revision, but is not one.
 ///
@@ -40,66 +168,19 @@ impl Categorized for NotARevision {
     }
 }
 
-/// Reads a revision, which is an event ID of EventSourcingDB, as a number.
-///
-/// A revision is a decimal number from 0 to 2^63-1, written with digits only,
-/// possibly with leading zeros. The database numbers its events with signed
-/// 64-bit integers, so a larger number is no event ID it could ever hand out.
-///
-/// ```
-/// use architecturekit::parse_revision;
-///
-/// assert_eq!(parse_revision("42"), Ok(42));
-/// assert!(parse_revision("").is_err());
-/// ```
-///
-/// # Errors
-///
-/// Fails with [`NotARevision`] for anything else, including the empty string,
-/// a sign, and spaces.
-pub fn parse_revision(revision: &str) -> Result<u64, NotARevision> {
-    let refused = || NotARevision {
-        revision: revision.to_owned(),
-    };
-
-    // u64::from_str would take a leading plus sign as well.
-    if revision.is_empty() || !revision.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(refused());
-    }
-
-    match revision.parse::<u64>() {
-        Ok(number) if number <= LARGEST_REVISION => Ok(number),
-        _ => Err(refused()),
-    }
-}
-
-/// Compares two revisions as numbers, since event IDs are decimal strings,
-/// and "10" sorts before "9" as text.
-///
-/// The empty string is a revision that is not set, as of a view that has seen
-/// nothing yet, and comes before every other one. It can not be taken for 0,
-/// since "0" is a real event ID.
-///
-/// # Errors
-///
-/// Fails with [`NotARevision`] if either side is neither empty nor a revision,
-/// as [`parse_revision`] reads it. Both sides are read before either is
-/// compared.
-pub fn compare_revisions(left: &str, right: &str) -> Result<Ordering, NotARevision> {
-    let left = revision_number(left)?;
-    let right = revision_number(right)?;
-
-    Ok(left.cmp(&right))
-}
-
-/// Reads a revision that may be unset, as `None` for the empty string, which
-/// comes before every revision that is set.
-pub(crate) fn revision_number(revision: &str) -> Result<Option<u64>, NotARevision> {
-    if revision.is_empty() {
-        return Ok(None);
-    }
-
-    parse_revision(revision).map(Some)
+/// Reads the ID of a stored event as a revision. The database never writes an
+/// ID that is not one, so such an event fails permanently.
+pub(crate) fn id_of(event: &eventsourcingdb::Event) -> Result<Revision, Permanent> {
+    event.id().parse().map_err(|refusal: NotARevision| {
+        Permanent::Other(Failure::new(
+            format!(
+                "event {:?} on {:?} has an ID that is not a revision",
+                event.id(),
+                event.subject(),
+            ),
+            Some(Box::new(refusal)),
+        ))
+    })
 }
 
 /// A view that knows how far its projection has come, which lets a reader
@@ -128,16 +209,15 @@ pub trait Revisioned: Send + Sync {
     ///
     /// Fails if the revision could not be read, so that a reader fails rather
     /// than taking the view for one that has seen nothing.
-    fn revision(&self) -> impl Future<Output = Result<Option<String>, Self::Error>> + Send;
+    fn revision(&self) -> impl Future<Output = Result<Option<Revision>, Self::Error>> + Send;
 
     /// Returns once the view has reached the revision, at once if it has
-    /// already. The empty revision counts as reached by every view.
+    /// already.
     ///
     /// # Errors
     ///
-    /// Fails for a revision that is not one, and if the view could not be
-    /// asked.
-    fn wait_for(&self, revision: &str) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    /// Fails if the view could not be asked.
+    fn wait_for(&self, revision: Revision) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 /// Returns the highest event ID among written events, which is the revision a
@@ -145,12 +225,11 @@ pub trait Revisioned: Send + Sync {
 /// if nothing was written. The order of the events does not matter, and an ID
 /// that is not a revision is skipped.
 #[must_use]
-pub fn revision_of(events: &[eventsourcingdb::Event]) -> Option<String> {
+pub fn revision_of(events: &[eventsourcingdb::Event]) -> Option<Revision> {
     events
         .iter()
-        .filter_map(|event| Some((parse_revision(event.id()).ok()?, event.id())))
-        .max_by_key(|(number, _)| *number)
-        .map(|(_, id)| id.to_owned())
+        .filter_map(|event| event.id().parse::<Revision>().ok())
+        .max()
 }
 
 /// Waits until the view has seen the events that
@@ -212,7 +291,7 @@ pub async fn wait_for_written<V: Revisioned + ?Sized>(
         return Ok(());
     };
 
-    match tokio::time::timeout(timeout, view.wait_for(&revision)).await {
+    match tokio::time::timeout(timeout, view.wait_for(revision)).await {
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => Err(NotCaughtUp::View(error)),
         Err(_) => Err(NotCaughtUp::TimedOut(timeout)),

@@ -1,14 +1,10 @@
-use std::{
-    error::Error,
-    fmt,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
+use std::{error::Error, fmt, sync::Arc, time::Duration};
 
+use chrono::{DateTime, Utc};
 use futures_util::future;
 use tokio::sync::watch;
 
-use crate::{Categorized, Category, ProjectionError};
+use crate::{Categorized, Category, ProjectionError, Revision, Subject};
 
 /// How a projection is started. Build it with [`named`](ProjectionOptions::named)
 /// or [`default`](Default::default), which leaves the projection without a
@@ -87,7 +83,7 @@ pub struct ProjectionStatus {
     pub phase: Phase,
     /// Since when the run is in its phase. For [`Phase::Reconnecting`], it is
     /// when the disruption began, however many attempts it has taken since.
-    pub since: SystemTime,
+    pub since: DateTime<Utc>,
     /// Why the run reconnects, or why it stopped. It is `None` while the run
     /// catches up or is live, and for a run that stopped because its token was
     /// cancelled.
@@ -96,7 +92,7 @@ pub struct ProjectionStatus {
     /// up.
     pub attempts: usize,
     /// The ID of the last event the projection committed, if any.
-    pub revision: Option<String>,
+    pub revision: Option<Revision>,
     /// Whether the run has caught up at least once. It stays true once set.
     pub has_caught_up: bool,
 }
@@ -130,7 +126,7 @@ impl ProjectionRun {
 
         let (status, _) = watch::channel(ProjectionStatus {
             phase: Phase::CatchingUp,
-            since: SystemTime::now(),
+            since: Utc::now(),
             error: None,
             attempts: 0,
             revision: None,
@@ -191,7 +187,7 @@ impl ProjectionRun {
     pub(crate) fn caught_up_now(&self) {
         self.inner.status.send_modify(|status| {
             status.phase = Phase::Live;
-            status.since = SystemTime::now();
+            status.since = Utc::now();
             status.error = None;
             status.attempts = 0;
             status.has_caught_up = true;
@@ -204,7 +200,7 @@ impl ProjectionRun {
         self.inner.status.send_modify(|status| {
             if status.phase != Phase::Reconnecting {
                 status.phase = Phase::Reconnecting;
-                status.since = SystemTime::now();
+                status.since = Utc::now();
                 status.attempts = 0;
             }
             status.error = Some(failure);
@@ -213,9 +209,9 @@ impl ProjectionRun {
     }
 
     /// Records the ID of the last event the projection committed.
-    pub(crate) fn committed(&self, event_id: &str) {
+    pub(crate) fn committed(&self, event_id: Revision) {
         self.inner.status.send_modify(|status| {
-            status.revision = Some(event_id.to_owned());
+            status.revision = Some(event_id);
         });
     }
 
@@ -223,7 +219,7 @@ impl ProjectionRun {
     pub(crate) fn stop(&self, failure: Option<ProjectionError>) {
         self.inner.status.send_modify(|status| {
             status.phase = Phase::Stopped;
-            status.since = SystemTime::now();
+            status.since = Utc::now();
             status.error = failure.map(Arc::new);
             status.attempts = 0;
         });
@@ -368,7 +364,7 @@ pub struct Reconnect {
     /// [`subject`](Reconnect::subject) tells it apart.
     pub projection: Option<String>,
     /// The subject the projection reads.
-    pub subject: String,
+    pub subject: Subject,
     /// Why the projection reads again, such as a stream that broke off, which
     /// is what a stream that ended is, since the database never ends one on
     /// its own.

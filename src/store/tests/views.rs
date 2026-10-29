@@ -13,14 +13,15 @@ use futures_util::FutureExt;
 
 use crate::{
     CancellationToken, Envelope, EventOn, ExecuteError, InMemoryView, KeyedView, Precondition,
-    Projection, ProjectionOptions, ResumableProjection, Revisioned, Subjects, Transient, ViewError,
-    wait_caught_up, wait_for_written,
+    Projection, ProjectionOptions, ResumableProjection, Revision, Revisioned, Subject, Subjects,
+    Transient, ViewError, wait_caught_up, wait_for_written,
 };
 
 use super::{
     CounterEvent, Incremented, Reset,
     commands::{Increment, counter_decider},
     database::{Database, subject_for},
+    revision_of_event,
 };
 
 /// The item of a view of counters, one per subject, which keeps its revision
@@ -29,7 +30,7 @@ use super::{
 struct CounterItem {
     subject: String,
     total: i64,
-    revision: String,
+    revision: Option<Revision>,
 }
 
 /// Keeps the total of every counter. If it follows resets, it handles them,
@@ -39,7 +40,7 @@ struct CounterItem {
 struct CounterItems {
     view: InMemoryView<String, CounterItem>,
     follows_resets: bool,
-    checkpoint: Mutex<Option<String>>,
+    checkpoint: Mutex<Option<Revision>>,
 }
 
 impl CounterItems {
@@ -54,8 +55,8 @@ impl CounterItems {
         }
     }
 
-    fn checkpoint(&self) -> Option<String> {
-        self.checkpoint.lock().expect("not poisoned").clone()
+    fn checkpoint(&self) -> Option<Revision> {
+        *self.checkpoint.lock().expect("not poisoned")
     }
 }
 
@@ -69,7 +70,7 @@ impl Projection for CounterItems {
         match &event.data {
             CounterEvent::Incremented(incremented) => {
                 let _ = self.view.upsert(event.subject.as_str(), &event, |item| {
-                    item.subject.clone_from(&event.subject);
+                    event.subject.as_str().clone_into(&mut item.subject);
                     item.total += incremented.by;
                 })?;
             }
@@ -82,20 +83,20 @@ impl Projection for CounterItems {
         Ok(())
     }
 
-    fn seen(&self, event_id: &str) {
+    fn seen(&self, event_id: Revision) {
         self.view.seen(event_id);
     }
 }
 
 impl ResumableProjection for CounterItems {
-    async fn checkpoint(&self) -> Result<Option<String>, ViewError> {
+    async fn checkpoint(&self) -> Result<Option<Revision>, ViewError> {
         tokio::task::yield_now().await;
         Ok(CounterItems::checkpoint(self))
     }
 
-    async fn save_checkpoint(&self, event_id: &str) -> Result<(), ViewError> {
+    async fn save_checkpoint(&self, event_id: Revision) -> Result<(), ViewError> {
         tokio::task::yield_now().await;
-        *self.checkpoint.lock().expect("not poisoned") = Some(event_id.to_owned());
+        *self.checkpoint.lock().expect("not poisoned") = Some(event_id);
 
         Ok(())
     }
@@ -106,15 +107,15 @@ impl ResumableProjection for CounterItems {
 /// wrote.
 async fn project_increment_and_reset(
     database: &Database,
-    subject: &str,
+    subject: &Subject,
     follows_resets: bool,
-) -> (CounterItem, Vec<String>) {
+) -> (CounterItem, Vec<Revision>) {
     let store = database.store().await;
     let written = store
         .write(
             vec![
-                EventOn::new(subject, &Incremented { by: 2 }),
-                EventOn::new(subject, &Reset {}),
+                EventOn::new(subject.clone(), &Incremented { by: 2 }),
+                EventOn::new(subject.clone(), &Reset {}),
             ],
             vec![Precondition::unconditionally()],
         )
@@ -123,13 +124,13 @@ async fn project_increment_and_reset(
 
     let items = CounterItems::new(follows_resets);
     store
-        .catch_up_projection(&Subjects::exact(subject), &items)
+        .catch_up_projection(&Subjects::exact(subject.clone()), &items)
         .await
         .expect("the projection catches up");
 
-    let Ok(item) = items.view.get(subject).await;
+    let Ok(item) = items.view.get(subject.as_str()).await;
     let item = item.expect("the counter is there");
-    let ids = written.iter().map(|event| event.id().to_owned()).collect();
+    let ids = written.iter().map(revision_of_event).collect();
 
     (item, ids)
 }
@@ -143,7 +144,8 @@ async fn fits_a_precondition_on_the_subject_if_the_item_follows_every_event_of_i
 
     assert_eq!(item.total, 2, "the reset must not change the item");
     assert_eq!(
-        item.revision, written[1],
+        item.revision,
+        Some(written[1]),
         "the revision has to follow the reset"
     );
 
@@ -152,7 +154,8 @@ async fn fits_a_precondition_on_the_subject_if_the_item_follows_every_event_of_i
         .await
         .execute(
             &counter_decider(),
-            Increment::new(&subject, 1).requiring_event_id(&item.revision),
+            Increment::new(&subject, 1)
+                .on_event_id(item.revision.expect("the item has a revision")),
         )
         .await;
     assert!(
@@ -168,14 +171,15 @@ async fn falls_behind_the_subject_if_the_projection_skips_an_event_of_it() {
 
     let (item, written) = project_increment_and_reset(&database, &subject, false).await;
 
-    assert_eq!(item.revision, written[0]);
+    assert_eq!(item.revision, Some(written[0]));
 
     let executed = database
         .store()
         .await
         .execute(
             &counter_decider(),
-            Increment::new(&subject, 1).requiring_event_id(&item.revision),
+            Increment::new(&subject, 1)
+                .on_event_id(item.revision.expect("the item has a revision")),
         )
         .await;
     assert!(
@@ -195,7 +199,7 @@ async fn resumes_from_the_checkpoint() {
     let _ = store
         .write(
             (1..=3)
-                .map(|by| EventOn::new(&subject, &Incremented { by }))
+                .map(|by| EventOn::new(subject.clone(), &Incremented { by }))
                 .collect(),
             vec![Precondition::unconditionally()],
         )
@@ -204,7 +208,7 @@ async fn resumes_from_the_checkpoint() {
 
     let items = CounterItems::new(true);
     store
-        .catch_up_resumable_projection(&Subjects::exact(&subject), &items)
+        .catch_up_resumable_projection(&Subjects::exact(subject.clone()), &items)
         .await
         .expect("the projection catches up");
 
@@ -229,7 +233,7 @@ async fn waits_for_what_execute_wrote_in_a_view_whose_projection_records_what_it
     let items = Arc::new(CounterItems::new(true));
     let token = CancellationToken::new();
     let run = store.start_projection(
-        Subjects::exact(&subject),
+        Subjects::exact(subject.clone()),
         Arc::clone(&items),
         token.clone(),
         ProjectionOptions::default(),
@@ -247,7 +251,10 @@ async fn waits_for_what_execute_wrote_in_a_view_whose_projection_records_what_it
     let waited = wait_for_written(&items.view, &written, Duration::from_secs(5)).await;
     assert!(matches!(waited, Ok(())), "{waited:?}");
     assert_eq!(
-        items.view.wait_for(written[0].id()).now_or_never(),
+        items
+            .view
+            .wait_for(revision_of_event(&written[0]))
+            .now_or_never(),
         Some(Ok(())),
         "the view has to have seen the event"
     );

@@ -14,7 +14,7 @@ use std::{
 use ed25519_dalek::VerifyingKey;
 use eventsourcingdb::{Client, container::Container};
 
-use crate::{Store, StoreBuilder};
+use crate::{Store, StoreBuilder, Subject};
 
 /// The source of every event the tests write.
 pub(super) const SOURCE: &str = "https://thenativeweb.io";
@@ -71,12 +71,12 @@ impl Database {
 
 /// Returns a subject below the given name that no other test writes to, which
 /// keeps the tests apart in case two of them share a database after all.
-pub(super) fn subject_for(name: &str) -> String {
+pub(super) fn subject_for(name: &str) -> Subject {
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
-    format!(
+    Subject::new(&format!(
         "/test/{name}/{}-{}",
         process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed),
-    )
+    ))
 }

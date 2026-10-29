@@ -2,7 +2,10 @@ use std::{error::Error, fmt, future::Future};
 
 use chrono::{DateTime, Utc};
 
-use crate::{Categorized, Category, Events, Failure, Permanent, Transient, UpcastEvent, Upcasters};
+use crate::{
+    Categorized, Category, Events, Failure, Permanent, Revision, Subject, Transient, UpcastEvent,
+    Upcasters, revision::id_of, subject::subject_of,
+};
 
 mod run;
 #[cfg(test)]
@@ -29,13 +32,13 @@ pub use run::{
 pub struct Envelope<E> {
     /// The ID of the event, which is the ID of the stored event, also for every
     /// event an upcaster splits it into.
-    pub id: String,
+    pub id: Revision,
     /// When the event was written.
     pub time: DateTime<Utc>,
     /// The source of the event.
     pub source: String,
     /// The subject of the event.
-    pub subject: String,
+    pub subject: Subject,
     /// The type of the event, after the upcasters have run.
     pub event_type: String,
     /// The `traceparent` of the event, if it has one.
@@ -67,12 +70,12 @@ impl<E: Events> Envelope<E> {
     /// # struct BookAcquired { title: String }
     /// # #[derive(Events)]
     /// # enum BookEvent { Acquired(BookAcquired) }
-    /// use architecturekit::{Envelope, InMemoryView};
+    /// use architecturekit::{Envelope, InMemoryView, Subject};
     ///
     /// let titles = InMemoryView::new(String::clone);
     /// let envelope = Envelope::new(
-    ///     "/books/42",
-    ///     "0",
+    ///     Subject::new("/books/42"),
+    ///     0,
     ///     BookEvent::Acquired(BookAcquired { title: "2001".to_owned() }),
     /// );
     /// let BookEvent::Acquired(acquired) = &envelope.data;
@@ -80,12 +83,12 @@ impl<E: Events> Envelope<E> {
     /// # Ok::<(), architecturekit::ViewError>(())
     /// ```
     #[must_use]
-    pub fn new(subject: &str, id: &str, data: E) -> Self {
+    pub fn new(subject: Subject, id: impl Into<Revision>, data: E) -> Self {
         Self {
-            id: id.to_owned(),
+            id: id.into(),
             time: DateTime::UNIX_EPOCH,
             source: MADE_UP_SOURCE.to_owned(),
-            subject: subject.to_owned(),
+            subject,
             event_type: data.event_type().to_owned(),
             trace_parent: None,
             trace_state: None,
@@ -114,8 +117,9 @@ pub trait Projected: sealed::Sealed + Sized + Send + 'static {
     ///
     /// # Errors
     ///
-    /// Fails permanently if an upcaster fails, or if the data of an event does
-    /// not match its type.
+    /// Fails permanently if the ID of the event is not a revision, or its
+    /// subject not a subject, neither of which the database ever writes, if an
+    /// upcaster fails, or if the data of an event does not match its type.
     #[doc(hidden)]
     fn project(
         stored: &eventsourcingdb::Event,
@@ -128,7 +132,7 @@ impl<E: Events + Send + 'static> Projected for E {
         stored: &eventsourcingdb::Event,
         upcasters: Option<&Upcasters>,
     ) -> Result<Vec<Envelope<Self>>, Permanent> {
-        let upcast = UpcastEvent::from_stored(stored);
+        let upcast = UpcastEvent::from_stored(stored)?;
         let parts = match upcasters {
             Some(upcasters) => upcasters.apply(upcast)?,
             None => vec![upcast],
@@ -137,10 +141,10 @@ impl<E: Events + Send + 'static> Projected for E {
         let mut envelopes = Vec::new();
         for (part, event) in parts.into_iter().enumerate() {
             let (id, time, source, subject, event_type) = (
-                event.id().to_owned(),
+                event.id(),
                 *event.time(),
                 event.source().to_owned(),
-                event.subject().to_owned(),
+                event.subject().clone(),
                 event.event_type().to_owned(),
             );
             let data = match E::from_data(&event_type, event.into_data()) {
@@ -177,10 +181,10 @@ impl Projected for eventsourcingdb::Event {
         _: Option<&Upcasters>,
     ) -> Result<Vec<Envelope<Self>>, Permanent> {
         Ok(vec![Envelope {
-            id: stored.id().to_owned(),
+            id: id_of(stored)?,
             time: *stored.time(),
             source: stored.source().to_owned(),
-            subject: stored.subject().to_owned(),
+            subject: subject_of(stored)?,
             event_type: stored.ty().to_owned(),
             trace_parent: stored.traceparent().map(ToOwned::to_owned),
             trace_state: stored.tracestate().map(ToOwned::to_owned),
@@ -236,7 +240,9 @@ pub trait Projection: Send + Sync + 'static {
     /// [`Revisioned`](crate::Revisioned)):
     ///
     /// ```
-    /// use architecturekit::{Envelope, Event, Events, InMemoryView, Projection, ViewError};
+    /// use architecturekit::{
+    ///     Envelope, Event, Events, InMemoryView, Projection, Revision, ViewError,
+    /// };
     /// use serde::{Deserialize, Serialize};
     ///
     /// #[derive(Debug, Serialize, Deserialize, Event)]
@@ -276,7 +282,7 @@ pub trait Projection: Send + Sync + 'static {
     ///         Ok(())
     ///     }
     ///
-    ///     fn seen(&self, event_id: &str) {
+    ///     fn seen(&self, event_id: Revision) {
     ///         self.books.seen(event_id);
     ///     }
     /// }
@@ -293,7 +299,7 @@ pub trait Projection: Send + Sync + 'static {
     /// A [`TransactionalProjection`] has no such method, since where data and
     /// revision have to become durable together, the revision belongs inside
     /// the transaction, and the projection writes it itself.
-    fn seen(&self, event_id: &str) {
+    fn seen(&self, event_id: Revision) {
         let _ = event_id;
     }
 }
@@ -305,12 +311,12 @@ pub trait Projection: Send + Sync + 'static {
 pub trait ResumableProjection: Projection {
     /// Returns the ID of the last event whose checkpoint was saved, or `None`
     /// if there is none yet.
-    fn checkpoint(&self) -> impl Future<Output = Result<Option<String>, Self::Error>> + Send;
+    fn checkpoint(&self) -> impl Future<Output = Result<Option<Revision>, Self::Error>> + Send;
 
     /// Saves the ID of the last event that was applied.
     fn save_checkpoint(
         &self,
-        event_id: &str,
+        event_id: Revision,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// Returns how many events are applied while catching up before the
@@ -343,7 +349,7 @@ pub trait TransactionalProjection: Send + Sync + 'static {
 
     /// Returns the ID of the last event that was committed, or `None` if there
     /// is none yet.
-    fn checkpoint(&self) -> impl Future<Output = Result<Option<String>, Self::Error>> + Send;
+    fn checkpoint(&self) -> impl Future<Output = Result<Option<Revision>, Self::Error>> + Send;
 
     /// Begins a transaction.
     fn begin(&self) -> impl Future<Output = Result<Self::Transaction, Self::Error>> + Send;
@@ -381,7 +387,10 @@ pub trait Transaction: Send {
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// Makes the applied events and the ID of the last one durable together.
-    fn commit(self, last_event_id: &str) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn commit(
+        self,
+        last_event_id: Revision,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// Undoes the applied events.
     fn rollback(self) -> impl Future<Output = Result<(), Self::Error>> + Send;
@@ -394,8 +403,9 @@ pub trait Transaction: Send {
 pub enum ProjectionError {
     /// Reading the events failed, and trying again later may succeed.
     Transient(Transient),
-    /// Reading the events failed, an event failed its verification or could
-    /// not be decoded, or an upcaster failed, and trying again will not help.
+    /// Reading the events failed, an event failed its verification, could not
+    /// be decoded, or has an ID that is not a revision or a subject that is not
+    /// one, or an upcaster failed, and trying again will not help.
     Permanent(Permanent),
     /// The projection panicked, with the given message. It is permanent, since
     /// it would panic again, also together with a failure that may pass.
@@ -417,11 +427,11 @@ pub enum ProjectionError {
     /// failure of the rollback is reported alongside, never instead of. Its
     /// category is the one of the failure that made it roll back.
     #[non_exhaustive]
-    RolledBack {
+    RollbackFailed {
         /// The failure that made the transaction roll back.
         cause: Box<ProjectionError>,
         /// The failure of the rollback.
-        rollback: Box<ProjectionError>,
+        error: Box<ProjectionError>,
     },
 }
 
@@ -452,7 +462,7 @@ impl ProjectionError {
     pub(crate) fn has_panicked(&self) -> bool {
         match self {
             Self::Panicked { .. } => true,
-            Self::RolledBack { cause, rollback } => cause.has_panicked() || rollback.has_panicked(),
+            Self::RollbackFailed { cause, error } => cause.has_panicked() || error.has_panicked(),
             Self::Transient(_) | Self::Permanent(_) | Self::Projection { .. } => false,
         }
     }
@@ -475,8 +485,8 @@ impl fmt::Display for ProjectionError {
                 Category::Permanent
             ),
             Self::Projection { error, .. } => error.fmt(formatter),
-            Self::RolledBack { cause, rollback } => {
-                write!(formatter, "{cause}, and rolling back failed: {rollback}")
+            Self::RollbackFailed { cause, error } => {
+                write!(formatter, "{cause}, and rolling back failed: {error}")
             }
         }
     }
@@ -489,7 +499,7 @@ impl Error for ProjectionError {
             Self::Permanent(failure) => failure.source(),
             Self::Panicked { .. } => None,
             Self::Projection { error, .. } => error.source(),
-            Self::RolledBack { cause, .. } => Some(cause.as_ref()),
+            Self::RollbackFailed { cause, .. } => Some(cause.as_ref()),
         }
     }
 }
@@ -501,8 +511,8 @@ impl Categorized for ProjectionError {
             Self::Permanent(failure) => failure.category(),
             Self::Panicked { .. } => Some(Category::Permanent),
             Self::Projection { category, .. } => *category,
-            Self::RolledBack { rollback, .. } if rollback.has_panicked() => rollback.category(),
-            Self::RolledBack { cause, .. } => cause.category(),
+            Self::RollbackFailed { error, .. } if error.has_panicked() => error.category(),
+            Self::RollbackFailed { cause, .. } => cause.category(),
         }
     }
 }

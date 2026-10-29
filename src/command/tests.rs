@@ -12,7 +12,8 @@ use eventsourcingdb::PreconditionOptions;
 use serde_json::Value;
 
 use crate::{
-    Categorized, Category, Command, Precondition, PreconditionsError, check_preconditions,
+    Categorized, Category, Command, Precondition, PreconditionsError, Revision, Subject,
+    check_preconditions,
 };
 
 /// Returns the JSON the client sends for the precondition the database checks
@@ -33,8 +34,8 @@ struct Increment {
 }
 
 impl Command for Increment {
-    fn subject(&self) -> String {
-        "/test/valid".to_owned()
+    fn subject(&self) -> Subject {
+        Subject::new("/test/valid")
     }
 
     fn preconditions(&self) -> Vec<Precondition> {
@@ -90,12 +91,12 @@ fn are_the_preconditions_of_the_client_sdk_that_require_takes() {
     for (name, made, database) in [
         (
             "on_pristine_subject",
-            Precondition::on_pristine_subject("/books/42"),
+            Precondition::on_pristine_subject(Subject::new("/books/42")),
             eventsourcingdb::Precondition::is_subject_pristine("/books/42", None),
         ),
         (
             "on_populated_subject",
-            Precondition::on_populated_subject("/books/42"),
+            Precondition::on_populated_subject(Subject::new("/books/42")),
             eventsourcingdb::Precondition::is_subject_populated("/books/42", None),
         ),
     ] {
@@ -114,7 +115,7 @@ fn are_the_preconditions_of_the_client_sdk_that_require_takes() {
 
 #[test]
 fn turns_on_event_id_into_the_revision_check_of_the_database() {
-    let made = Precondition::on_event_id("/books/23", "5");
+    let made = Precondition::on_event_id(Subject::new("/books/23"), Revision::from(5));
 
     assert_eq!(
         database_json(&made),
@@ -130,20 +131,20 @@ fn turns_on_event_id_into_the_revision_check_of_the_database() {
 fn guard_the_subject_they_name() {
     for (left, right) in [
         (
-            Precondition::on_pristine_subject("/books/23"),
-            Precondition::on_pristine_subject("/books/42"),
+            Precondition::on_pristine_subject(Subject::new("/books/23")),
+            Precondition::on_pristine_subject(Subject::new("/books/42")),
         ),
         (
-            Precondition::on_populated_subject("/books/23"),
-            Precondition::on_populated_subject("/books/42"),
+            Precondition::on_populated_subject(Subject::new("/books/23")),
+            Precondition::on_populated_subject(Subject::new("/books/42")),
         ),
         (
-            Precondition::on_event_id("/books/23", "7"),
-            Precondition::on_event_id("/books/42", "7"),
+            Precondition::on_event_id(Subject::new("/books/23"), Revision::from(7)),
+            Precondition::on_event_id(Subject::new("/books/42"), Revision::from(7)),
         ),
         (
-            Precondition::on_event_id("/books/42", "6"),
-            Precondition::on_event_id("/books/42", "7"),
+            Precondition::on_event_id(Subject::new("/books/42"), Revision::from(6)),
+            Precondition::on_event_id(Subject::new("/books/42"), Revision::from(7)),
         ),
     ] {
         assert_ne!(
@@ -159,8 +160,17 @@ fn accepts_what_execute_accepts() {
     let accepted: [fn() -> Vec<Precondition>; 5] = [
         || vec![Precondition::unconditionally()],
         || vec![Precondition::on_state_read()],
-        || vec![Precondition::on_pristine_subject("/test/valid")],
-        || vec![Precondition::on_event_id("/test/valid", "0")],
+        || {
+            vec![Precondition::on_pristine_subject(Subject::new(
+                "/test/valid",
+            ))]
+        },
+        || {
+            vec![Precondition::on_event_id(
+                Subject::new("/test/valid"),
+                Revision::from(0),
+            )]
+        },
         || {
             vec![
                 Precondition::require(eventsourcingdb::Precondition::is_subject_populated(
@@ -215,39 +225,6 @@ fn refuses_a_command_without_preconditions_or_with_unconditionally_among_others(
     }
 }
 
-#[test]
-fn refuses_an_event_id_of_the_caller_that_is_not_a_revision() {
-    let refusal = check_preconditions(&Increment {
-        preconditions: || vec![Precondition::on_event_id("/test/valid", "")],
-    })
-    .expect_err("the empty string is not a revision");
-
-    assert!(
-        matches!(refusal, PreconditionsError::NotARevision(_)),
-        "{refusal:?}"
-    );
-    assert_eq!(refusal.category(), None);
-    assert_eq!(refusal.to_string(), r#"not a revision: """#);
-}
-
-#[test]
-fn names_a_mistake_in_the_code_before_one_of_the_caller() {
-    let refusal = check_preconditions(&Increment {
-        preconditions: || {
-            vec![
-                Precondition::on_event_id("/test/valid", "not a revision"),
-                Precondition::unconditionally(),
-            ]
-        },
-    })
-    .expect_err("unconditionally is combined with another one");
-
-    assert!(
-        matches!(refusal, PreconditionsError::Permanent(_)),
-        "{refusal:?}"
-    );
-}
-
 // Comparing preconditions, which the test fixture relies on to compare the
 // preconditions that a command declares.
 
@@ -280,16 +257,16 @@ fn query(query: &str) -> Precondition {
 #[test]
 fn equals_a_precondition_that_checks_the_same() {
     assert_eq!(
-        Precondition::on_pristine_subject("/account/1"),
+        Precondition::on_pristine_subject(Subject::new("/account/1")),
         pristine("/account/1", None)
     );
     assert_eq!(
-        Precondition::on_populated_subject("/account/2"),
+        Precondition::on_populated_subject(Subject::new("/account/2")),
         populated("/account/2", None)
     );
     assert_eq!(
-        Precondition::on_event_id("/account/3", "9"),
-        Precondition::on_event_id("/account/3", "9")
+        Precondition::on_event_id(Subject::new("/account/3"), Revision::from(9)),
+        Precondition::on_event_id(Subject::new("/account/3"), Revision::from(9))
     );
     assert_eq!(
         query("FROM e IN events PROJECT INTO true"),
@@ -305,12 +282,12 @@ fn equals_a_precondition_that_checks_the_same() {
 #[test]
 fn differs_from_a_precondition_on_another_subject_revision_or_query() {
     assert_ne!(
-        Precondition::on_pristine_subject("/account/1"),
-        Precondition::on_pristine_subject("/account/other")
+        Precondition::on_pristine_subject(Subject::new("/account/1")),
+        Precondition::on_pristine_subject(Subject::new("/account/other"))
     );
     assert_ne!(
-        Precondition::on_event_id("/account/3", "9"),
-        Precondition::on_event_id("/account/3", "10")
+        Precondition::on_event_id(Subject::new("/account/3"), Revision::from(9)),
+        Precondition::on_event_id(Subject::new("/account/3"), Revision::from(10))
     );
     assert_ne!(
         query("FROM e IN events PROJECT INTO true"),
@@ -363,7 +340,7 @@ fn takes_options_that_leave_a_subject_check_to_the_subject_alone_as_none() {
 fn tells_on_event_id_from_the_revision_check_it_stands_for() {
     // Require leaves the ID unchecked, so the two behave differently.
     assert_ne!(
-        Precondition::on_event_id("/account/3", "9"),
+        Precondition::on_event_id(Subject::new("/account/3"), Revision::from(9)),
         on_revision("/account/3", None)
     );
 }
@@ -373,8 +350,8 @@ fn tells_the_kinds_of_the_kit_apart() {
     let kinds = [
         Precondition::on_state_read(),
         Precondition::unconditionally(),
-        Precondition::on_pristine_subject("/account/1"),
-        Precondition::on_event_id("/account/1", "9"),
+        Precondition::on_pristine_subject(Subject::new("/account/1")),
+        Precondition::on_event_id(Subject::new("/account/1"), Revision::from(9)),
     ];
 
     for (left_index, left) in kinds.iter().enumerate() {

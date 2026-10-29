@@ -5,8 +5,9 @@ use http::{Response, StatusCode};
 
 use super::answer::json;
 use crate::{
-    Categorized, Category, EmptyRange, ExecuteError, LoadError, NotARevision, NotCaughtUp,
-    PreconditionsError, ReadError, ReadOptionsError, RegisterSchemasError, Transient, WriteError,
+    Categorized, Category, EmptyRange, ExecuteError, LoadError, NotARevision, NotASubject,
+    NotCaughtUp, PreconditionsError, ReadError, ReadOptionsError, RegisterSchemasError,
+    SubjectValuesError, Transient, WriteError,
 };
 
 #[cfg(test)]
@@ -41,7 +42,7 @@ enum Logged {
 /// | [`unauthorized`](HttpError::unauthorized) | 401 | `unauthorized` |
 /// | [`forbidden`](HttpError::forbidden) | 403 | `forbidden: …` |
 /// | [`not_found`](HttpError::not_found) | 404 | `not found: …` |
-/// | [`malformed`](HttpError::malformed), a value that is not a revision, an empty range | 400 | its own |
+/// | [`malformed`](HttpError::malformed), a value that is not a revision or not a subject, values that can not compose a subject, an empty range | 400 | its own |
 /// | [`too_large`](HttpError::too_large) | 413 | `request body too large: …` |
 /// | [`unsupported_media_type`](HttpError::unsupported_media_type) | 415 | `unsupported media type: …` |
 /// | a failure of the category [`Category::Domain`] | 422 | its own |
@@ -256,9 +257,9 @@ impl axum::response::IntoResponse for HttpError {
 
 /// Answers every failure of the kit, which all turn into this one: a failure
 /// of the decider by its category (see [`HttpError::of`]), a conflict with
-/// 409, a write whose outcome is unknown with 500 and a text of its own, a
-/// value that is not a revision and an empty range with 400 and their own
-/// text, and any other failure by its category.
+/// 409, a write whose outcome is unknown with 500 and a text of its own, an
+/// empty range with 400 and its own text, and any other failure by its
+/// category.
 impl<D: Error + Categorized + Send + Sync + 'static> From<crate::Error<D>> for HttpError {
     fn from(error: crate::Error<D>) -> Self {
         match error {
@@ -275,7 +276,6 @@ impl<D: Error + Categorized + Send + Sync + 'static> From<crate::Error<D>> for H
                 "outcome unknown: the request may have succeeded",
                 Box::new(error),
             ),
-            crate::Error::NotARevision(refusal) => refusal.into(),
             crate::Error::EmptyRange(refusal) => refusal.into(),
         }
     }
@@ -312,6 +312,23 @@ through_the_failure_of_the_kit!(
 /// comes from the caller, such as a revision in a header.
 impl From<NotARevision> for HttpError {
     fn from(refusal: NotARevision) -> Self {
+        Self::told(StatusCode::BAD_REQUEST, refusal.to_string())
+    }
+}
+
+/// Answers a value that is not a subject with 400 and its own text, since it
+/// comes from the caller, such as a subject in a request.
+impl From<NotASubject> for HttpError {
+    fn from(refusal: NotASubject) -> Self {
+        Self::told(StatusCode::BAD_REQUEST, refusal.to_string())
+    }
+}
+
+/// Answers values that can not compose a subject with 400 and their own text,
+/// since they come from the caller, such as an ID in the path of a request
+/// that [`SubjectScheme::try_build`](crate::SubjectScheme::try_build) refuses.
+impl From<SubjectValuesError> for HttpError {
+    fn from(refusal: SubjectValuesError) -> Self {
         Self::told(StatusCode::BAD_REQUEST, refusal.to_string())
     }
 }

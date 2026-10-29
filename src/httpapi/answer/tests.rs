@@ -41,7 +41,7 @@ fn reports_the_revision_on_success() {
 #[test]
 fn reports_an_empty_revision_if_nothing_was_written() {
     let answer = CommandAnswer::new(&[]);
-    assert_eq!(answer.revision(), "");
+    assert_eq!(answer.revision(), None);
 
     let (response, _) = answered(answer);
 

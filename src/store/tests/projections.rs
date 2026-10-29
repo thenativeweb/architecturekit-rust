@@ -15,10 +15,11 @@ use std::{
 use super::{
     CounterEvent, Incremented, Reset, Unrelated,
     database::{Database, subject_for},
+    revision_of_event,
 };
 use crate::{
     Categorized, Category, Envelope, EventOn, Precondition, Projection, ProjectionError,
-    ResumableProjection, Store, Subjects, Transaction, TransactionalProjection,
+    ResumableProjection, Revision, Store, Subject, Subjects, Transaction, TransactionalProjection,
 };
 
 /// The failure of a projection of a test, of the given category.
@@ -61,20 +62,20 @@ impl Trouble {
 /// Adds up the increments it applies, and remembers what it applied and saved.
 #[derive(Default)]
 struct Totals {
-    applied: Mutex<Vec<String>>,
-    saved: Mutex<Vec<String>>,
-    checkpoint: Mutex<Option<String>>,
+    applied: Mutex<Vec<Revision>>,
+    saved: Mutex<Vec<Revision>>,
+    checkpoint: Mutex<Option<Revision>>,
     total: Mutex<i64>,
     trouble: Trouble,
     batch_size: usize,
 }
 
 impl Totals {
-    fn applied(&self) -> Vec<String> {
+    fn applied(&self) -> Vec<Revision> {
         self.applied.lock().expect("not poisoned").clone()
     }
 
-    fn saved(&self) -> Vec<String> {
+    fn saved(&self) -> Vec<Revision> {
         self.saved.lock().expect("not poisoned").clone()
     }
 
@@ -104,24 +105,21 @@ impl Projection for Totals {
 }
 
 impl ResumableProjection for Totals {
-    async fn checkpoint(&self) -> Result<Option<String>, Refused> {
+    async fn checkpoint(&self) -> Result<Option<Revision>, Refused> {
         tokio::task::yield_now().await;
         self.trouble.panics_in("checkpoint");
         if self.trouble == Trouble::RefusesToReadTheCheckpoint {
             return Err(Refused(Category::Transient));
         }
 
-        Ok(self.checkpoint.lock().expect("not poisoned").clone())
+        Ok(*self.checkpoint.lock().expect("not poisoned"))
     }
 
-    async fn save_checkpoint(&self, event_id: &str) -> Result<(), Refused> {
+    async fn save_checkpoint(&self, event_id: Revision) -> Result<(), Refused> {
         tokio::task::yield_now().await;
         self.trouble.panics_in("save_checkpoint");
-        self.saved
-            .lock()
-            .expect("not poisoned")
-            .push(event_id.to_owned());
-        *self.checkpoint.lock().expect("not poisoned") = Some(event_id.to_owned());
+        self.saved.lock().expect("not poisoned").push(event_id);
+        *self.checkpoint.lock().expect("not poisoned") = Some(event_id);
 
         Ok(())
     }
@@ -132,7 +130,7 @@ impl ResumableProjection for Totals {
 }
 
 /// The total of a ledger together with the ID of the last event it counts.
-type Committed = Arc<Mutex<(i64, Option<String>)>>;
+type Committed = Arc<Mutex<(i64, Option<Revision>)>>;
 
 /// A ledger whose transactions add up the increments, and which keeps the
 /// committed total together with the ID of the last event.
@@ -149,8 +147,8 @@ struct Booking {
 }
 
 impl Ledger {
-    fn committed(&self) -> (i64, Option<String>) {
-        self.committed.lock().expect("not poisoned").clone()
+    fn committed(&self) -> (i64, Option<Revision>) {
+        *self.committed.lock().expect("not poisoned")
     }
 }
 
@@ -159,11 +157,11 @@ impl TransactionalProjection for Ledger {
     type Error = Refused;
     type Transaction = Booking;
 
-    async fn checkpoint(&self) -> Result<Option<String>, Refused> {
+    async fn checkpoint(&self) -> Result<Option<Revision>, Refused> {
         tokio::task::yield_now().await;
         self.trouble.panics_in("checkpoint");
 
-        Ok(self.committed.lock().expect("not poisoned").1.clone())
+        Ok(self.committed.lock().expect("not poisoned").1)
     }
 
     async fn begin(&self) -> Result<Booking, Refused> {
@@ -192,12 +190,12 @@ impl Transaction for Booking {
         Ok(())
     }
 
-    async fn commit(self, last_event_id: &str) -> Result<(), Refused> {
+    async fn commit(self, last_event_id: Revision) -> Result<(), Refused> {
         tokio::task::yield_now().await;
         self.trouble.panics_in("commit");
         let mut committed = self.committed.lock().expect("not poisoned");
         committed.0 += self.pending;
-        committed.1 = Some(last_event_id.to_owned());
+        committed.1 = Some(last_event_id);
 
         Ok(())
     }
@@ -227,19 +225,19 @@ impl Projection for Stored {
 
 /// Writes increments by the given amounts to the subject, and returns their
 /// IDs.
-async fn increment(store: &Store, subject: &str, amounts: &[i64]) -> Vec<String> {
+async fn increment(store: &Store, subject: &Subject, amounts: &[i64]) -> Vec<Revision> {
     store
         .write(
             amounts
                 .iter()
-                .map(|by| EventOn::new(subject, &Incremented { by: *by }))
+                .map(|by| EventOn::new(subject.clone(), &Incremented { by: *by }))
                 .collect(),
             vec![Precondition::unconditionally()],
         )
         .await
         .expect("the events are written")
         .iter()
-        .map(|event| event.id().to_owned())
+        .map(revision_of_event)
         .collect()
 }
 
@@ -252,7 +250,7 @@ async fn applies_what_is_stored() {
     let totals = Totals::default();
 
     store
-        .catch_up_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect("the projection catches up");
 
@@ -263,13 +261,13 @@ async fn applies_what_is_stored() {
 async fn reads_a_subject_tree() {
     let database = Database::start().await;
     let store = database.store().await;
-    let _ = increment(&store, "/books/42", &[1]).await;
-    let _ = increment(&store, "/books/42/notes", &[2]).await;
-    let _ = increment(&store, "/readers/7", &[4]).await;
+    let _ = increment(&store, &Subject::new("/books/42"), &[1]).await;
+    let _ = increment(&store, &Subject::new("/books/42/notes"), &[2]).await;
+    let _ = increment(&store, &Subject::new("/readers/7"), &[4]).await;
     let totals = Totals::default();
 
     store
-        .catch_up_projection(&Subjects::tree("/books"), &totals)
+        .catch_up_projection(&Subjects::tree(Subject::new("/books")), &totals)
         .await
         .expect("the projection catches up");
 
@@ -284,7 +282,7 @@ async fn leaves_out_events_of_types_the_projection_has_no_variant_for() {
     let _ = increment(&store, &subject, &[1]).await;
     let _ = store
         .write(
-            vec![EventOn::new(&subject, &Unrelated {})],
+            vec![EventOn::new(subject.clone(), &Unrelated {})],
             vec![Precondition::unconditionally()],
         )
         .await
@@ -292,11 +290,11 @@ async fn leaves_out_events_of_types_the_projection_has_no_variant_for() {
     let totals = Totals::default();
 
     store
-        .catch_up_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect("the projection catches up");
 
-    assert_eq!(totals.applied(), ["0"]);
+    assert_eq!(totals.applied(), [Revision::from(0)]);
 }
 
 #[tokio::test]
@@ -307,11 +305,11 @@ async fn has_nothing_to_do_without_events() {
     database
         .store()
         .await
-        .catch_up_projection(&Subjects::tree("/"), &totals)
+        .catch_up_projection(&Subjects::tree(Subject::new("/")), &totals)
         .await
         .expect("there is nothing to do");
 
-    assert_eq!(totals.applied(), Vec::<String>::new());
+    assert_eq!(totals.applied(), Vec::<Revision>::new());
 }
 
 #[tokio::test]
@@ -321,12 +319,12 @@ async fn resumes_from_its_checkpoint() {
     let subject = subject_for("catch-up-resumable");
     let ids = increment(&store, &subject, &[1, 2, 3]).await;
     let totals = Totals {
-        checkpoint: Mutex::new(Some(ids[0].clone())),
+        checkpoint: Mutex::new(Some(ids[0])),
         ..Totals::default()
     };
 
     store
-        .catch_up_resumable_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_resumable_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect("the projection catches up");
 
@@ -347,14 +345,11 @@ async fn saves_the_checkpoint_once_per_batch_while_catching_up() {
     };
 
     store
-        .catch_up_resumable_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_resumable_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect("the projection catches up");
 
-    assert_eq!(
-        totals.saved(),
-        [ids[1].clone(), ids[3].clone(), ids[4].clone()]
-    );
+    assert_eq!(totals.saved(), [ids[1], ids[3], ids[4]]);
 }
 
 #[tokio::test]
@@ -369,7 +364,7 @@ async fn reports_a_failing_apply_with_its_category() {
     };
 
     let failure = store
-        .catch_up_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect_err("the projection refuses");
 
@@ -396,7 +391,7 @@ async fn stops_when_the_checkpoint_can_not_be_read() {
     };
 
     let failure = store
-        .catch_up_resumable_projection(&Subjects::exact(&subject), &totals)
+        .catch_up_resumable_projection(&Subjects::exact(subject.clone()), &totals)
         .await
         .expect_err("the checkpoint can not be read");
 
@@ -404,7 +399,7 @@ async fn stops_when_the_checkpoint_can_not_be_read() {
         matches!(failure, ProjectionError::Projection { .. }),
         "{failure:?}"
     );
-    assert_eq!(totals.applied(), Vec::<String>::new());
+    assert_eq!(totals.applied(), Vec::<Revision>::new());
 }
 
 #[tokio::test]
@@ -416,19 +411,19 @@ async fn commits_a_transaction_with_the_last_event_id_and_resumes_from_it() {
     let ledger = Ledger::default();
 
     store
-        .catch_up_transactional_projection(&Subjects::exact(&subject), &ledger)
+        .catch_up_transactional_projection(&Subjects::exact(subject.clone()), &ledger)
         .await
         .expect("the projection catches up");
-    assert_eq!(ledger.committed(), (3, Some(first[1].clone())));
+    assert_eq!(ledger.committed(), (3, Some(first[1])));
 
     let second = increment(&store, &subject, &[4]).await;
     store
-        .catch_up_transactional_projection(&Subjects::exact(&subject), &ledger)
+        .catch_up_transactional_projection(&Subjects::exact(subject.clone()), &ledger)
         .await
         .expect("the projection catches up again");
     assert_eq!(
         ledger.committed(),
-        (7, Some(second[0].clone())),
+        (7, Some(second[0])),
         "it went on from its checkpoint"
     );
 }
@@ -439,7 +434,7 @@ async fn comes_back_from_catching_up_as_an_error_wherever_the_projection_panics(
     let store = database.store().await;
     let subject = subject_for("catch-up-panics");
     let _ = increment(&store, &subject, &[1]).await;
-    let subjects = Subjects::exact(&subject);
+    let subjects = Subjects::exact(subject.clone());
 
     let mut failures = Vec::new();
     for function in ["apply", "checkpoint", "save_checkpoint"] {
@@ -486,8 +481,8 @@ async fn hands_a_projection_of_stored_events_every_event_with_its_hash() {
     let _ = store
         .write(
             vec![
-                EventOn::new(&subject, &Reset {}),
-                EventOn::new(&subject, &Unrelated {}),
+                EventOn::new(subject.clone(), &Reset {}),
+                EventOn::new(subject.clone(), &Unrelated {}),
             ],
             vec![Precondition::unconditionally()],
         )
@@ -496,7 +491,7 @@ async fn hands_a_projection_of_stored_events_every_event_with_its_hash() {
     let stored = Stored(Mutex::new(Vec::new()));
 
     store
-        .catch_up_projection(&Subjects::exact(&subject), &stored)
+        .catch_up_projection(&Subjects::exact(subject.clone()), &stored)
         .await
         .expect("the projection catches up");
 

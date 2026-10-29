@@ -14,7 +14,7 @@ use super::{
     commands::{Increment, counter_decider, write_past_the_kit},
     database::{Database, subject_for},
 };
-use crate::{Event, ExecuteError, State, Store};
+use crate::{Event, ExecuteError, State, Store, Subject};
 
 /// How many events the counting state of each test has evolved by, which shows
 /// how many events were read. Every test counts with a state of its own, by
@@ -97,7 +97,7 @@ async fn cached(database: &Database, max_subjects: usize) -> Store {
 
 /// Writes increments by the given amounts to the subject past the store, as
 /// another process would.
-async fn increment(database: &Database, subject: &str, amounts: &[i64]) {
+async fn increment(database: &Database, subject: &Subject, amounts: &[i64]) {
     for by in amounts {
         write_past_the_kit(
             database,
@@ -109,7 +109,7 @@ async fn increment(database: &Database, subject: &str, amounts: &[i64]) {
     }
 }
 
-async fn load<S: State>(store: &Store, subject: &str) -> S {
+async fn load<S: State>(store: &Store, subject: &Subject) -> S {
     store.load::<S>(subject).await.expect("the state loads")
 }
 
@@ -157,8 +157,8 @@ async fn keeps_states_of_different_types_on_the_same_subject_apart() {
 async fn keeps_the_states_of_different_subjects_apart() {
     let database = Database::start().await;
     let store = cached(&database, 10).await;
-    let first = format!("{}/first", subject_for("cache-subjects"));
-    let second = format!("{}/second", subject_for("cache-subjects"));
+    let first = Subject::new(&format!("{}/first", subject_for("cache-subjects")));
+    let second = Subject::new(&format!("{}/second", subject_for("cache-subjects")));
 
     increment(&database, &first, &[3, 4]).await;
     increment(&database, &second, &[5]).await;
@@ -204,8 +204,8 @@ async fn hands_out_a_clone_of_the_cached_state() {
 async fn reads_an_evicted_subject_again() {
     let database = Database::start().await;
     let store = cached(&database, 1).await;
-    let first = format!("{}/first", subject_for("cache-evicted"));
-    let second = format!("{}/second", subject_for("cache-evicted"));
+    let first = Subject::new(&format!("{}/first", subject_for("cache-evicted")));
+    let second = Subject::new(&format!("{}/second", subject_for("cache-evicted")));
 
     increment(&database, &first, &[1, 2]).await;
     increment(&database, &second, &[3]).await;

@@ -12,10 +12,7 @@ use std::{
 use futures_util::{Stream, stream};
 use tokio::sync::watch;
 
-use crate::{
-    Categorized, Category, Envelope, Failure, NotARevision, Permanent, Revisioned, parse_revision,
-    revision::revision_number,
-};
+use crate::{Categorized, Category, Envelope, Failure, Permanent, Revision, Revisioned};
 
 mod index;
 #[cfg(test)]
@@ -94,11 +91,9 @@ pub trait KeyedView<K: ?Sized, T>: View<T> {
 /// from that, the view has a revision as a whole, which is the last event it
 /// has seen at all (see [`seen`](InMemoryView::seen)).
 ///
-/// Every function that changes the view takes the event it applies, and
-/// refuses one whose ID is not a revision (see
-/// [`compare_revisions`](crate::compare_revisions)) at once: it fails with
-/// [`ViewError::NotARevision`], and leaves the view as it is. So the mistake
-/// shows where it is made, rather than at the next change of the same item.
+/// Every function that changes the view takes the event it applies. The ID of
+/// an event is a [`Revision`], so the view compares IDs as numbers: event 10
+/// is newer than event 9.
 ///
 /// An upcaster may split a stored event into several events, its parts, which
 /// all carry the ID of the stored event, and each its position as
@@ -129,7 +124,7 @@ pub struct InMemoryView<K, T> {
 type KeyOf<K, T> = Box<dyn Fn(&T) -> K + Send + Sync>;
 
 /// Returns the field of an item that holds its revision.
-type RevisionIn<T> = Box<dyn Fn(&mut T) -> &mut String + Send + Sync>;
+type RevisionIn<T> = Box<dyn Fn(&mut T) -> &mut Option<Revision> + Send + Sync>;
 
 /// What a view shares with its indexes.
 struct Shared<K, T> {
@@ -138,13 +133,7 @@ struct Shared<K, T> {
     entries: RwLock<Entries<K, T>>,
 
     // How far the projection has come, which waiting readers watch.
-    revision: watch::Sender<Option<SeenEvent>>,
-}
-
-/// The last event a view has seen, as its ID and as the number it stands for.
-struct SeenEvent {
-    id: String,
-    number: u64,
+    revision: watch::Sender<Option<Revision>>,
 }
 
 /// The items of a view. `order` keeps the keys in the order in which they
@@ -158,12 +147,11 @@ struct Entries<K, T> {
 }
 
 /// An item together with the event that changed it last: `revision` is the ID
-/// of that event, read as a number, and `part` is its part, if an upcaster
-/// split it. `position` is where the key of the item is in the order of the
-/// view.
+/// of that event, and `part` is its part, if an upcaster split it. `position`
+/// is where the key of the item is in the order of the view.
 struct Entry<T> {
     item: T,
-    revision: u64,
+    revision: Revision,
     part: usize,
     position: usize,
 }
@@ -177,39 +165,30 @@ trait Indexer<K, T>: Send + Sync {
 }
 
 /// The event a change of the view applies: `id` is its ID, which becomes the
-/// revision of the item, `number` is the same ID read as a number, which is
-/// what the view compares, and `part` is its part, if an upcaster split it.
-struct AppliedEvent<'e> {
-    id: &'e str,
-    number: u64,
+/// revision of the item, and `part` is its part, if an upcaster split it.
+struct AppliedEvent {
+    id: Revision,
     part: usize,
 }
 
-impl<'e> AppliedEvent<'e> {
-    /// Reads the event a change of the view applies. It refuses an ID that
-    /// [`parse_revision`] refuses, so that the view never keeps an ID it can
-    /// not compare with the next one, and fails where the mistake is made.
-    /// That includes the empty ID, which would come before every revision, so
-    /// that every change with it would be skipped silently.
-    fn of<E>(event: &'e Envelope<E>) -> Result<Self, ViewError> {
-        let number = parse_revision(&event.id).map_err(ViewError::NotARevision)?;
-
-        Ok(Self {
-            id: &event.id,
-            number,
+impl AppliedEvent {
+    /// Takes the event a change of the view applies.
+    fn of<E>(event: &Envelope<E>) -> Self {
+        Self {
+            id: event.id,
             part: event.part,
-        })
+        }
     }
 
     /// Returns whether this part of an event is newer than the last change of
     /// an item. An event with a higher ID is newer, whatever its part, and for
     /// the same ID, a later part is newer than an earlier one.
     fn is_newer_than<T>(&self, entry: &Entry<T>) -> bool {
-        if self.number == entry.revision {
+        if self.id == entry.revision {
             return self.part > entry.part;
         }
 
-        self.number > entry.revision
+        self.id > entry.revision
     }
 }
 
@@ -234,10 +213,12 @@ where
     /// ```
     /// use architecturekit::InMemoryView;
     ///
+    /// use architecturekit::Revision;
+    ///
     /// #[derive(Clone, Debug, Default, PartialEq)]
     /// struct Book {
     ///     id: String,
-    ///     revision: String,
+    ///     revision: Option<Revision>,
     /// }
     ///
     /// let books = InMemoryView::with_revision_in(
@@ -264,7 +245,7 @@ where
     #[must_use]
     pub fn with_revision_in(
         key_of: impl Fn(&T) -> K + Send + Sync + 'static,
-        field: impl Fn(&mut T) -> &mut String + Send + Sync + 'static,
+        field: impl Fn(&mut T) -> &mut Option<Revision> + Send + Sync + 'static,
     ) -> Self {
         Self::build(Box::new(key_of), Some(Box::new(field)))
     }
@@ -289,22 +270,14 @@ where
     /// projection calls it from [`Projection::seen`](crate::Projection::seen)
     /// for every event it has seen, also for one it ignores. Events may
     /// arrive more than once and out of order after a restart, so an event
-    /// the view has already passed does not move the revision backwards, and
-    /// an ID that is not a revision is ignored.
-    pub fn seen(&self, event_id: &str) {
-        let Ok(number) = parse_revision(event_id) else {
-            return;
-        };
-
+    /// the view has already passed does not move the revision backwards.
+    pub fn seen(&self, event_id: Revision) {
         let _ = self.shared.revision.send_if_modified(|seen| {
-            if seen.as_ref().is_some_and(|seen| seen.number >= number) {
+            if seen.is_some_and(|seen| seen >= event_id) {
                 return false;
             }
 
-            *seen = Some(SeenEvent {
-                id: event_id.to_owned(),
-                number,
-            });
+            *seen = Some(event_id);
             true
         });
     }
@@ -318,14 +291,13 @@ where
     ///
     /// # Errors
     ///
-    /// Fails with [`ViewError::NotARevision`] if the ID of the event is not a
-    /// revision, and with [`ViewError::Permanent`] if the event is newer than
-    /// an item with the same key, since a second item under that key points to
-    /// a mistake in the events or the key. A later part of the same event
-    /// counts as newer, so two parts of a split event that insert an item with
-    /// the same key fail as well.
+    /// Fails with [`ViewError::Permanent`] if the event is newer than an item
+    /// with the same key, since a second item under that key points to a
+    /// mistake in the events or the key. A later part of the same event counts
+    /// as newer, so two parts of a split event that insert an item with the
+    /// same key fail as well.
     pub fn insert<E>(&self, event: &Envelope<E>, item: T) -> Result<Outcome, ViewError> {
-        let event = AppliedEvent::of(event)?;
+        let event = AppliedEvent::of(event);
 
         let mut entries = self.shared.write();
         let key = (self.shared.key_of)(&item);
@@ -359,9 +331,8 @@ where
     ///
     /// # Errors
     ///
-    /// Fails with [`ViewError::NotARevision`] if the ID of the event is not a
-    /// revision, and with [`ViewError::Permanent`] if the key of the item,
-    /// after the change, differs from the given one.
+    /// Fails with [`ViewError::Permanent`] if the key of the item, after the
+    /// change, differs from the given one.
     pub fn upsert<E, Q>(
         &self,
         key: &Q,
@@ -373,7 +344,7 @@ where
         Q: Debug + Eq + Hash + ?Sized,
         T: Default,
     {
-        let event = AppliedEvent::of(event)?;
+        let event = AppliedEvent::of(event);
 
         let mut entries = self.shared.write();
         if entries.items.contains_key(key) {
@@ -416,9 +387,8 @@ where
     ///
     /// # Errors
     ///
-    /// Fails with [`ViewError::NotARevision`] if the ID of the event is not a
-    /// revision, and with [`ViewError::Permanent`] if the change changes the
-    /// key of the item, which leaves the item as it was.
+    /// Fails with [`ViewError::Permanent`] if the change changes the key of
+    /// the item, which leaves the item as it was.
     pub fn update<E, Q>(
         &self,
         key: &Q,
@@ -429,7 +399,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        let event = AppliedEvent::of(event)?;
+        let event = AppliedEvent::of(event);
 
         self.shared
             .change(&mut self.shared.write(), key, &event, change)
@@ -442,19 +412,15 @@ where
     ///
     /// The revision of the item goes with it, so an older event that adds the
     /// item again, such as one that is applied a second time, adds it again.
-    ///
-    /// # Errors
-    ///
-    /// Fails with [`ViewError::NotARevision`] if the ID of the event is not a
-    /// revision.
-    pub fn delete<E, Q>(&self, key: &Q, event: &Envelope<E>) -> Result<Outcome, ViewError>
+    /// Removing never fails.
+    pub fn delete<E, Q>(&self, key: &Q, event: &Envelope<E>) -> Outcome
     where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
     {
-        let event = AppliedEvent::of(event)?;
+        let event = AppliedEvent::of(event);
 
-        Ok(self.shared.write().delete(key, &event))
+        self.shared.write().delete(key, &event)
     }
 
     /// Changes every matching item for which the event is newer, and reports
@@ -464,16 +430,15 @@ where
     ///
     /// # Errors
     ///
-    /// Fails with [`ViewError::NotARevision`] if the ID of the event is not a
-    /// revision, and with [`ViewError::Permanent`] once the change changes the
-    /// key of an item, which keeps the items changed before.
+    /// Fails with [`ViewError::Permanent`] once the change changes the key of
+    /// an item, which keeps the items changed before.
     pub fn update_where<E>(
         &self,
         matches: impl FnMut(&T) -> bool,
         event: &Envelope<E>,
         change: impl FnMut(&mut T),
     ) -> Result<usize, ViewError> {
-        let event = AppliedEvent::of(event)?;
+        let event = AppliedEvent::of(event);
 
         let mut entries = self.shared.write();
         let keys = entries.keys_where(matches);
@@ -484,23 +449,15 @@ where
     /// Removes every matching item for which the event is newer, and reports
     /// how many it removed. Like with
     /// [`update_where`](InMemoryView::update_where), the match runs while the
-    /// view is locked, so it must not call any function of the view.
-    ///
-    /// # Errors
-    ///
-    /// Fails with [`ViewError::NotARevision`] if the ID of the event is not a
-    /// revision.
-    pub fn delete_where<E>(
-        &self,
-        matches: impl FnMut(&T) -> bool,
-        event: &Envelope<E>,
-    ) -> Result<usize, ViewError> {
-        let event = AppliedEvent::of(event)?;
+    /// view is locked, so it must not call any function of the view. Removing
+    /// never fails.
+    pub fn delete_where<E>(&self, matches: impl FnMut(&T) -> bool, event: &Envelope<E>) -> usize {
+        let event = AppliedEvent::of(event);
 
         let mut entries = self.shared.write();
         let keys = entries.keys_where(matches);
 
-        Ok(entries.delete_all(&keys, &event))
+        entries.delete_all(&keys, &event)
     }
 }
 
@@ -522,14 +479,14 @@ where
 
     /// Writes the ID of the event into the field of the item, if the view
     /// keeps the revision there.
-    fn set_revision(&self, item: &mut T, event: &AppliedEvent<'_>) {
+    fn set_revision(&self, item: &mut T, event: &AppliedEvent) {
         if let Some(field) = &self.revision_in {
-            event.id.clone_into(field(item));
+            *field(item) = Some(event.id);
         }
     }
 
     /// Stores a new item, whose key is free.
-    fn add(&self, entries: &mut Entries<K, T>, key: K, mut item: T, event: &AppliedEvent<'_>) {
+    fn add(&self, entries: &mut Entries<K, T>, key: K, mut item: T, event: &AppliedEvent) {
         self.set_revision(&mut item, event);
 
         for index in &entries.indexes {
@@ -542,7 +499,7 @@ where
             key,
             Entry {
                 item,
-                revision: event.number,
+                revision: event.id,
                 part: event.part,
                 position,
             },
@@ -554,7 +511,7 @@ where
         &self,
         entries: &mut Entries<K, T>,
         key: &Q,
-        event: &AppliedEvent<'_>,
+        event: &AppliedEvent,
         change: impl FnOnce(&mut T),
     ) -> Result<Outcome, ViewError>
     where
@@ -591,7 +548,7 @@ where
             .get_mut::<K>(&changed_key)
             .expect("the item is still there, since the view is locked");
         entry.item = changed;
-        entry.revision = event.number;
+        entry.revision = event.id;
         entry.part = event.part;
 
         Ok(Outcome::Applied)
@@ -603,7 +560,7 @@ where
         &self,
         entries: &mut Entries<K, T>,
         keys: Vec<K>,
-        event: &AppliedEvent<'_>,
+        event: &AppliedEvent,
         mut change: impl FnMut(&mut T),
     ) -> Result<usize, ViewError> {
         let mut changed = 0;
@@ -619,7 +576,7 @@ where
 
 impl<K: Eq + Hash, T> Entries<K, T> {
     /// Removes one item, if the event is newer.
-    fn delete<Q>(&mut self, key: &Q, event: &AppliedEvent<'_>) -> Outcome
+    fn delete<Q>(&mut self, key: &Q, event: &AppliedEvent) -> Outcome
     where
         K: Borrow<Q> + Clone,
         Q: Eq + Hash + ?Sized,
@@ -643,7 +600,7 @@ impl<K: Eq + Hash, T> Entries<K, T> {
     }
 
     /// Removes the items with the given keys, and counts the ones it removed.
-    fn delete_all(&mut self, keys: &[K], event: &AppliedEvent<'_>) -> usize
+    fn delete_all(&mut self, keys: &[K], event: &AppliedEvent) -> usize
     where
         K: Clone,
     {
@@ -741,28 +698,19 @@ where
     K: Clone + Debug + Eq + Hash + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
 {
-    /// A view in memory fails only to wait for a revision that is not one.
-    type Error = NotARevision;
+    /// A view in memory keeps its revision in memory, so asking it never
+    /// fails.
+    type Error = Infallible;
 
-    /// Returns the last event the view has seen. The view keeps it in memory,
-    /// so it never fails.
-    fn revision(&self) -> impl Future<Output = Result<Option<String>, NotARevision>> + Send {
-        future::ready(Ok(self
-            .shared
-            .revision
-            .borrow()
-            .as_ref()
-            .map(|seen| seen.id.clone())))
+    /// Returns the last event the view has seen.
+    fn revision(&self) -> impl Future<Output = Result<Option<Revision>, Infallible>> + Send {
+        future::ready(Ok(*self.shared.revision.borrow()))
     }
 
-    async fn wait_for(&self, revision: &str) -> Result<(), NotARevision> {
-        let Some(wanted) = revision_number(revision)? else {
-            return Ok(());
-        };
-
+    async fn wait_for(&self, revision: Revision) -> Result<(), Infallible> {
         let mut seen = self.shared.revision.subscribe();
         drop(
-            seen.wait_for(|seen| seen.as_ref().is_some_and(|seen| seen.number >= wanted))
+            seen.wait_for(|seen| seen.is_some_and(|seen| seen >= revision))
                 .await
                 .expect("the view keeps its revision while it is borrowed"),
         );
@@ -785,12 +733,7 @@ impl<K, T> Debug for InMemoryView<K, T> {
             .field("indexes", &entries.indexes.len())
             .field(
                 "revision",
-                &self
-                    .shared
-                    .revision
-                    .borrow()
-                    .as_ref()
-                    .map(|seen| seen.id.clone()),
+                &self.shared.revision.borrow().map(|seen| seen.to_string()),
             )
             .finish_non_exhaustive()
     }
@@ -826,8 +769,6 @@ impl fmt::Display for Outcome {
 /// same event again will fail again.
 #[derive(Debug)]
 pub enum ViewError {
-    /// The ID of the event is not a revision, such as the empty string.
-    NotARevision(NotARevision),
     /// The event would leave the view with two items under the same key, or
     /// with an item under a key other than its own, which points to a mistake
     /// in the events or the key.
@@ -843,12 +784,6 @@ impl ViewError {
 impl fmt::Display for ViewError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotARevision(refusal) => write!(
-                formatter,
-                "{}: not a revision: an operation on a view needs the ID of the event it applies, not {:?}",
-                Category::Permanent,
-                refusal.revision(),
-            ),
             Self::Permanent(failure) => fmt::Display::fmt(failure, formatter),
         }
     }
@@ -857,7 +792,6 @@ impl fmt::Display for ViewError {
 impl Error for ViewError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::NotARevision(_) => None,
             Self::Permanent(failure) => failure.source(),
         }
     }

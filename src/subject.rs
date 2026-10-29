@@ -1,4 +1,8 @@
-use std::{collections::HashMap, error::Error, fmt};
+use std::{borrow::Borrow, collections::HashMap, error::Error, fmt, str::FromStr};
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+
+use crate::{Categorized, Category, Failure, Permanent};
 
 #[cfg(test)]
 mod tests;
@@ -6,6 +10,221 @@ mod tests;
 /// The characters that EventSourcingDB allows in a segment of a subject, for
 /// the messages of errors and panics.
 const SUBJECT_CHARACTERS: &str = "A-Z, a-z, 0-9, underscores, and hyphens";
+
+/// A subject of EventSourcingDB, which is a path such as `/books/42`: it starts
+/// with a slash, `/` alone is the root, and its segments are separated by
+/// single slashes, none of them empty, each made only of the characters A-Z,
+/// a-z, 0-9, underscores, and hyphens. A single slash at the end is taken, and
+/// left out, as the database does, so `/books/42/` is `/books/42`. A value
+/// that is no such path can not be a subject at all.
+///
+/// A subject that is written in the code is made with
+/// [`new`](Subject::new), which panics for one that is not a subject. One that
+/// comes from outside, such as a path in a request, is read with `parse`,
+/// which refuses it with [`NotASubject`], and one that is made of values from
+/// outside is built with [`SubjectScheme::try_build`]:
+///
+/// ```
+/// use architecturekit::Subject;
+///
+/// let book = Subject::new("/books/42");
+/// assert_eq!(book.as_str(), "/books/42");
+///
+/// let read: Subject = "/books/42/".parse()?;
+/// assert_eq!(read, book);
+///
+/// assert!("books/42".parse::<Subject>().is_err());
+/// # Ok::<(), architecturekit::NotASubject>(())
+/// ```
+///
+/// serde writes and reads a subject as a string.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Subject(String);
+
+impl Subject {
+    /// Takes a subject that is written in the code.
+    ///
+    /// # Panics
+    ///
+    /// A subject that is not one is a programming error, so this panics. For a
+    /// subject that comes from outside, use `parse` instead.
+    #[must_use]
+    #[track_caller]
+    pub fn new(subject: &str) -> Self {
+        match subject.parse() {
+            Ok(subject) => subject,
+            Err(refusal) => panic!("architecturekit: {refusal}"),
+        }
+    }
+
+    /// Returns the root, `/`, which every subject lies under.
+    #[must_use]
+    pub fn root() -> Self {
+        Self("/".to_owned())
+    }
+
+    /// Returns the subject as text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Reads a subject, and leaves out a single slash at its end.
+///
+/// # Errors
+///
+/// Fails with [`NotASubject`] for a value that does not start with a slash,
+/// that has an empty segment, or a segment with a character the database does
+/// not allow in a subject.
+impl FromStr for Subject {
+    type Err = NotASubject;
+
+    fn from_str(subject: &str) -> Result<Self, NotASubject> {
+        let refused = |reason| NotASubject {
+            subject: subject.to_owned(),
+            reason,
+        };
+
+        let Some(rest) = subject.strip_prefix('/') else {
+            return Err(refused(Reason::NoLeadingSlash));
+        };
+        if rest.is_empty() {
+            return Ok(Self::root());
+        }
+
+        let rest = rest.strip_suffix('/').unwrap_or(rest);
+        for segment in rest.split('/') {
+            if segment.is_empty() {
+                return Err(refused(Reason::EmptySegment));
+            }
+            if !has_only_subject_characters(segment) {
+                return Err(refused(Reason::Characters));
+            }
+        }
+
+        Ok(Self(format!("/{rest}")))
+    }
+}
+
+impl fmt::Display for Subject {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.pad(&self.0)
+    }
+}
+
+impl AsRef<str> for Subject {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for Subject {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<Subject> for String {
+    fn from(subject: Subject) -> Self {
+        subject.0
+    }
+}
+
+/// Writes the subject as a string.
+impl Serialize for Subject {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+/// Reads the subject from a string, as [`parse`](str::parse) does, and fails
+/// with the text of [`NotASubject`] for a string that is not one.
+impl<'de> Deserialize<'de> for Subject {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_str(SubjectVisitor)
+    }
+}
+
+/// Reads a subject from a string for serde.
+struct SubjectVisitor;
+
+impl de::Visitor<'_> for SubjectVisitor {
+    type Value = Subject;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a subject, which is a string such as \"/books/42\"")
+    }
+
+    fn visit_str<E: de::Error>(self, subject: &str) -> Result<Subject, E> {
+        subject.parse().map_err(E::custom)
+    }
+}
+
+/// A value that was meant to be a subject, but is not one, such as `books/42`
+/// or `/books//42`.
+///
+/// It usually comes from the caller, such as a path in a request, so it
+/// belongs to no category: its [`Categorized::category`] is `None`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotASubject {
+    subject: String,
+    reason: Reason,
+}
+
+/// Why a value is not a subject.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reason {
+    NoLeadingSlash,
+    EmptySegment,
+    Characters,
+}
+
+impl NotASubject {
+    /// Returns the value that is not a subject.
+    #[must_use]
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+}
+
+impl fmt::Display for NotASubject {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "not a subject: {:?}, ", self.subject)?;
+
+        match self.reason {
+            Reason::NoLeadingSlash => formatter.write_str("which does not start with a slash"),
+            Reason::EmptySegment => formatter.write_str("which has an empty segment"),
+            Reason::Characters => write!(
+                formatter,
+                "whose segments may only contain {SUBJECT_CHARACTERS}"
+            ),
+        }
+    }
+}
+
+impl Error for NotASubject {}
+
+impl Categorized for NotASubject {
+    fn category(&self) -> Option<Category> {
+        None
+    }
+}
+
+/// Reads the subject of a stored event. The database never writes a subject
+/// that is not one, so such an event fails permanently.
+pub(crate) fn subject_of(event: &eventsourcingdb::Event) -> Result<Subject, Permanent> {
+    event.subject().parse().map_err(|refusal: NotASubject| {
+        Permanent::Other(Failure::new(
+            format!(
+                "event {:?} is on {:?}, which is not a subject",
+                event.id(),
+                event.subject(),
+            ),
+            Some(Box::new(refusal)),
+        ))
+    })
+}
 
 /// How a subject is composed: literal segments and placeholders in braces, as
 /// in `/tenant/{tenant}/workshop/{workshop}`.
@@ -22,14 +241,15 @@ const SUBJECT_CHARACTERS: &str = "A-Z, a-z, 0-9, underscores, and hyphens";
 /// let workshops = SubjectScheme::new("/tenant/{tenant}/workshop/{workshop}");
 ///
 /// let subject = workshops.build(&["acme", "event-sourcing"]);
-/// assert_eq!(subject, "/tenant/acme/workshop/event-sourcing");
+/// assert_eq!(subject.as_str(), "/tenant/acme/workshop/event-sourcing");
 ///
 /// assert_eq!(workshops.value(&subject, "workshop"), Some("event-sourcing"));
 /// ```
 ///
 /// EventSourcingDB allows only ASCII letters and digits, underscores, and
-/// hyphens in a segment of a subject, so this is what the literal segments of
-/// a pattern and the values of its placeholders may contain. The names of its
+/// hyphens in a segment of a subject (see [`Subject`]), so this is what the
+/// literal segments of a pattern and the values of its placeholders may
+/// contain. The names of its
 /// placeholders follow the same rule, so that a typo, such as a brace too many,
 /// is not taken for a name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -127,7 +347,7 @@ impl SubjectScheme {
     /// under the same root, which [`match_subject`](SubjectScheme::match_subject)
     /// tells apart.
     #[must_use]
-    pub fn root(&self) -> String {
+    pub fn root(&self) -> Subject {
         let literals: Vec<&str> = self
             .segments
             .iter()
@@ -137,7 +357,9 @@ impl SubjectScheme {
             })
             .collect();
 
-        format!("/{}", literals.join("/"))
+        // The literals are checked when the scheme is built, and the root has
+        // none, so this is a subject.
+        Subject(format!("/{}", literals.join("/")))
     }
 
     /// Returns the placeholder names, in the order
@@ -155,13 +377,42 @@ impl SubjectScheme {
     /// A wrong number of values, or one that [`check`](SubjectScheme::check)
     /// refuses, such as an empty one or one with a slash or a dot, is a
     /// programming error, so this panics. Values that come from outside, such
-    /// as an ID in a request, may well be like that, so check them first.
+    /// as an ID in a request, may well be like that, so build from them with
+    /// [`try_build`](SubjectScheme::try_build) instead.
     #[must_use]
-    pub fn build<V: AsRef<str>>(&self, values: &[V]) -> String {
+    pub fn build<V: AsRef<str>>(&self, values: &[V]) -> Subject {
         if let Err(message) = self.check_values(values, true) {
             panic!("{message}");
         }
 
+        self.compose(values)
+    }
+
+    /// Composes a subject from values that come from outside, such as an ID in
+    /// a request, as [`build`](SubjectScheme::build) does, but refuses values
+    /// that [`check`](SubjectScheme::check) refuses, rather than panicking:
+    ///
+    /// ```
+    /// use architecturekit::SubjectScheme;
+    ///
+    /// let books = SubjectScheme::new("/books/{book_id}");
+    ///
+    /// assert_eq!(books.try_build(&["42"])?.as_str(), "/books/42");
+    /// assert!(books.try_build(&["a.b"]).is_err());
+    /// # Ok::<(), architecturekit::SubjectValuesError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Fails with what [`check`](SubjectScheme::check) fails with.
+    pub fn try_build<V: AsRef<str>>(&self, values: &[V]) -> Result<Subject, SubjectValuesError> {
+        self.check(values)?;
+
+        Ok(self.compose(values))
+    }
+
+    /// Composes a subject from values that have been checked.
+    fn compose<V: AsRef<str>>(&self, values: &[V]) -> Subject {
         let mut subject = String::new();
         let mut next = 0;
 
@@ -176,7 +427,9 @@ impl SubjectScheme {
             }
         }
 
-        subject
+        // The literals are checked when the scheme is built, and the values
+        // before they are composed, so this is a subject.
+        Subject(subject)
     }
 
     /// Tells whether the values can compose a subject: one per placeholder,
@@ -251,13 +504,16 @@ impl SubjectScheme {
     /// It is called `match_subject` rather than `match`, which is a keyword in
     /// Rust. To take a single value out of a subject, use
     /// [`value`](SubjectScheme::value), which panics for a name the pattern
-    /// does not have.
+    /// does not have. It takes a [`Subject`] as well as text.
     #[must_use]
-    pub fn match_subject<'scheme, 'subject>(
+    pub fn match_subject<'scheme, 'subject, S>(
         &'scheme self,
-        subject: &'subject str,
-    ) -> Option<HashMap<&'scheme str, &'subject str>> {
-        let parts: Vec<&str> = subject.strip_prefix('/')?.split('/').collect();
+        subject: &'subject S,
+    ) -> Option<HashMap<&'scheme str, &'subject str>>
+    where
+        S: AsRef<str> + ?Sized,
+    {
+        let parts: Vec<&str> = subject.as_ref().strip_prefix('/')?.split('/').collect();
         if parts.len() != self.segments.len() {
             return None;
         }
@@ -294,11 +550,14 @@ impl SubjectScheme {
     /// A placeholder that the pattern does not have, such as one with a typo,
     /// is a programming error, so this panics, whatever the subject is.
     #[must_use]
-    pub fn value<'subject>(
+    pub fn value<'subject, S>(
         &self,
-        subject: &'subject str,
+        subject: &'subject S,
         placeholder: &str,
-    ) -> Option<&'subject str> {
+    ) -> Option<&'subject str>
+    where
+        S: AsRef<str> + ?Sized,
+    {
         assert!(
             self.placeholders.iter().any(|name| name == placeholder),
             "architecturekit: pattern {:?} has no placeholder {placeholder:?}",
@@ -312,6 +571,9 @@ impl SubjectScheme {
 
 /// The values that [`SubjectScheme::check`] refuses, with a message that may
 /// reach the caller of an API.
+///
+/// They usually come from the caller, such as an ID in a request, so it
+/// belongs to no category: its [`Categorized::category`] is `None`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubjectValuesError(String);
 
@@ -322,6 +584,12 @@ impl fmt::Display for SubjectValuesError {
 }
 
 impl Error for SubjectValuesError {}
+
+impl Categorized for SubjectValuesError {
+    fn category(&self) -> Option<Category> {
+        None
+    }
+}
 
 /// Tells whether a segment of a subject contains only characters that
 /// EventSourcingDB allows there. It is true for an empty segment, which the

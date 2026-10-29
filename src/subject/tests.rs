@@ -1,13 +1,17 @@
-// These tests check SubjectScheme and its values. "agrees with the database
-// on every character" needs write, so it comes with the store. Messages quote
+// These tests check Subject, SubjectScheme and its values. "agrees with the
+// database on every character" and "agrees with the database on what a
+// subject is" need the database, so they come with the store. Messages quote
 // values the way Rust does, with {:?}.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    error::Error,
     panic::{UnwindSafe, catch_unwind},
 };
 
-use crate::SubjectScheme;
+use serde_json::json;
+
+use crate::{Categorized, NotASubject, Subject, SubjectScheme};
 
 /// The characters that EventSourcingDB allows in a segment of a subject,
 /// written out rather than taken from the code under test.
@@ -56,7 +60,7 @@ fn builds_and_matches() {
     let scheme = workshops();
 
     let subject = scheme.build(&["acme", "es-cqrs"]);
-    assert_eq!(subject, "/tenant/acme/workshop/es-cqrs");
+    assert_eq!(subject.as_str(), "/tenant/acme/workshop/es-cqrs");
 
     let values = scheme.match_subject(&subject).expect("the subject matches");
     assert_eq!(values["tenant"], "acme");
@@ -67,7 +71,7 @@ fn builds_and_matches() {
 fn without_placeholders() {
     let scheme = SubjectScheme::new("/system/health");
 
-    assert_eq!(scheme.build::<&str>(&[]), "/system/health");
+    assert_eq!(scheme.build::<&str>(&[]).as_str(), "/system/health");
     assert!(
         scheme.match_subject("/system/health").is_some(),
         "should match itself"
@@ -229,7 +233,7 @@ fn accepts_placeholder_names_with_every_character_the_database_allows() {
     );
 
     let subject = scheme.build(&["acme", "42", "a", "b", "c"]);
-    assert_eq!(subject, "/tenant/acme/agreements/42/a/b/c");
+    assert_eq!(subject.as_str(), "/tenant/acme/agreements/42/a/b/c");
 
     let values = scheme.match_subject(&subject).expect("the subject matches");
     assert_eq!(
@@ -278,14 +282,14 @@ fn accepts_literals_with_every_character_the_database_allows() {
     let scheme = SubjectScheme::new("/Tenant_2/{tenant}/work-shop/{workshop}");
 
     let subject = scheme.build(&["acme", "42"]);
-    assert_eq!(subject, "/Tenant_2/acme/work-shop/42");
+    assert_eq!(subject.as_str(), "/Tenant_2/acme/work-shop/42");
 
     let values = scheme.match_subject(&subject).expect("the subject matches");
     assert_eq!(
         values,
         HashMap::from([("tenant", "acme"), ("workshop", "42")])
     );
-    assert_eq!(scheme.root(), "/Tenant_2");
+    assert_eq!(scheme.root().as_str(), "/Tenant_2");
 }
 
 #[test]
@@ -388,7 +392,7 @@ fn names_only_the_placeholder_when_it_checks_but_the_crate_and_the_pattern_when_
         let error = scheme.check(&values).expect_err(name);
         assert_eq!(error.to_string(), checked, "{name}");
         assert!(
-            std::error::Error::source(&error).is_none(),
+            Error::source(&error).is_none(),
             "{name}: the error wraps nothing"
         );
         assert_eq!(
@@ -456,7 +460,7 @@ fn accepts_values_with_characters_the_database_allows() {
         assert!(scheme.check(&[value]).is_ok(), "{value:?} should pass");
 
         let subject = scheme.build(&[value]);
-        assert_eq!(subject, format!("/workshop/{value}"));
+        assert_eq!(subject.as_str(), format!("/workshop/{value}"));
 
         let values = scheme.match_subject(&subject).expect("the subject matches");
         assert_eq!(values["workshop"], value);
@@ -522,7 +526,11 @@ fn reports_its_root() {
         ("/{tenant}/orders/{order}", "/"),
         ("/system/health", "/system/health"),
     ] {
-        assert_eq!(SubjectScheme::new(pattern).root(), root, "{pattern}");
+        assert_eq!(
+            SubjectScheme::new(pattern).root().as_str(),
+            root,
+            "{pattern}"
+        );
     }
 }
 
@@ -539,7 +547,9 @@ fn builds_every_subject_under_its_root() {
         let subject = scheme.build(&values);
         let root = scheme.root();
 
-        let is_under = subject == root || root == "/" || subject.starts_with(&format!("{root}/"));
+        let is_under = subject == root
+            || root == Subject::root()
+            || subject.as_str().starts_with(&format!("{root}/"));
         assert!(is_under, "{subject:?} is not under {root:?}");
     }
 }
@@ -617,4 +627,230 @@ fn panics_for_a_literal_segment_or_a_placeholder_in_braces_neither_of_which_is_t
             )),
         );
     }
+}
+
+// Subjects.
+
+#[test]
+fn reads_a_subject_and_hands_it_out_as_text() {
+    let subject: Subject = "/books/42".parse().expect("it is a subject");
+
+    assert_eq!(subject.as_str(), "/books/42");
+    assert_eq!(subject.to_string(), "/books/42");
+    assert_eq!(AsRef::<str>::as_ref(&subject), "/books/42");
+    assert_eq!(String::from(subject.clone()), "/books/42");
+    assert_eq!(subject, Subject::new("/books/42"));
+}
+
+#[test]
+fn the_root_is_a_slash_alone() {
+    assert_eq!(Subject::root().as_str(), "/");
+    assert_eq!("/".parse::<Subject>(), Ok(Subject::root()));
+}
+
+#[test]
+fn leaves_out_a_single_slash_at_the_end_as_the_database_does() {
+    for (subject, expected) in [
+        ("/books/", "/books"),
+        ("/books/42/", "/books/42"),
+        ("/books/42", "/books/42"),
+    ] {
+        assert_eq!(
+            subject
+                .parse::<Subject>()
+                .map(|subject| subject.to_string()),
+            Ok(expected.to_owned()),
+            "{subject:?}"
+        );
+    }
+}
+
+#[test]
+fn refuses_what_the_database_refuses_naming_what_is_wrong() {
+    for (subject, reason) in [
+        ("", "which does not start with a slash"),
+        ("books/42", "which does not start with a slash"),
+        (" /books", "which does not start with a slash"),
+        ("//", "which has an empty segment"),
+        ("/books//42", "which has an empty segment"),
+        ("/books/42//", "which has an empty segment"),
+        (
+            "/books/a.b",
+            "whose segments may only contain A-Z, a-z, 0-9, underscores, and hyphens",
+        ),
+        (
+            "/books/a b",
+            "whose segments may only contain A-Z, a-z, 0-9, underscores, and hyphens",
+        ),
+        (
+            "/b\u{00fc}cher",
+            "whose segments may only contain A-Z, a-z, 0-9, underscores, and hyphens",
+        ),
+    ] {
+        let refusal = subject.parse::<Subject>().expect_err(subject);
+
+        assert_eq!(refusal.subject(), subject);
+        assert_eq!(
+            refusal.to_string(),
+            format!("not a subject: {subject:?}, {reason}"),
+        );
+        assert_eq!(refusal.category(), None, "{subject:?}");
+        assert!(refusal.source().is_none(), "{subject:?}");
+    }
+}
+
+#[test]
+fn takes_exactly_the_characters_the_database_allows_in_a_segment() {
+    assert_eq!(
+        format!("/{DATABASE_CHARACTERS}/{DATABASE_CHARACTERS}")
+            .parse::<Subject>()
+            .map(|subject| subject.to_string()),
+        Ok(format!("/{DATABASE_CHARACTERS}/{DATABASE_CHARACTERS}")),
+    );
+
+    for character in some_characters() {
+        if character == '/' || DATABASE_CHARACTERS.contains(character) {
+            continue;
+        }
+
+        assert!(
+            format!("/books/a{character}b").parse::<Subject>().is_err(),
+            "{character:?} must be refused"
+        );
+    }
+}
+
+#[test]
+#[should_panic(
+    expected = r#"architecturekit: not a subject: "books/42", which does not start with a slash"#
+)]
+fn new_panics_for_a_subject_that_is_not_one() {
+    let _ = Subject::new("books/42");
+}
+
+#[test]
+fn compares_and_sorts_subjects_by_their_text() {
+    let mut subjects = vec![
+        Subject::new("/books/9"),
+        Subject::new("/books/10"),
+        Subject::root(),
+    ];
+    subjects.sort();
+
+    assert_eq!(
+        subjects,
+        [
+            Subject::root(),
+            Subject::new("/books/10"),
+            Subject::new("/books/9"),
+        ]
+    );
+}
+
+#[test]
+fn finds_a_subject_by_its_text_in_a_collection() {
+    let subjects = HashSet::from([Subject::new("/books/42")]);
+
+    assert!(subjects.contains("/books/42"));
+    assert!(!subjects.contains("/books/23"));
+}
+
+#[test]
+fn serde_writes_a_subject_as_a_string() {
+    assert_eq!(
+        serde_json::to_value(Subject::new("/books/42")).expect("a subject is JSON"),
+        json!("/books/42")
+    );
+}
+
+#[test]
+fn serde_reads_a_subject_from_a_string_by_the_rules_of_parse() {
+    let subject: Subject =
+        serde_json::from_value(json!("/books/42/")).expect("the string is a subject");
+
+    assert_eq!(subject, Subject::new("/books/42"));
+}
+
+#[test]
+fn serde_reads_back_what_it_writes() {
+    for subject in [Subject::root(), Subject::new("/books/42")] {
+        let written = serde_json::to_string(&subject).expect("a subject is JSON");
+
+        assert_eq!(
+            serde_json::from_str::<Subject>(&written).expect("it reads back"),
+            subject
+        );
+    }
+}
+
+#[test]
+fn serde_refuses_a_string_that_is_not_a_subject_with_its_text() {
+    let failure =
+        serde_json::from_value::<Subject>(json!("books/42")).expect_err("it is no subject");
+
+    assert_eq!(
+        failure.to_string(),
+        r#"not a subject: "books/42", which does not start with a slash"#
+    );
+}
+
+#[test]
+fn serde_refuses_what_is_not_a_string() {
+    let failure = serde_json::from_value::<Subject>(json!(42)).expect_err("a subject is a string");
+
+    assert_eq!(
+        failure.to_string(),
+        r#"invalid type: integer `42`, expected a subject, which is a string such as "/books/42""#
+    );
+}
+
+#[test]
+fn a_refusal_is_an_error_of_its_own() {
+    let refusal: NotASubject = "books".parse::<Subject>().expect_err("it is no subject");
+    let boxed: Box<dyn Error> = Box::new(refusal.clone());
+
+    assert_eq!(boxed.to_string(), refusal.to_string());
+}
+
+// Building subjects from values that come from outside.
+
+#[test]
+fn tries_to_build_a_subject() {
+    let built = workshops()
+        .try_build(&["acme", "es-cqrs"])
+        .expect("the values fit");
+
+    assert_eq!(built, workshops().build(&["acme", "es-cqrs"]));
+    assert_eq!(built.as_str(), "/tenant/acme/workshop/es-cqrs");
+}
+
+#[test]
+fn refuses_to_build_from_values_that_check_refuses_with_the_same_error() {
+    let scheme = workshops();
+
+    for (name, values) in [
+        ("too few", vec!["acme"]),
+        ("too many", vec!["acme", "a", "b"]),
+        ("empty", vec!["acme", ""]),
+        ("contains a slash", vec!["acme", "with/slash"]),
+        ("contains a dot", vec!["acme", "a.b"]),
+    ] {
+        let refusal = scheme.try_build(&values).expect_err(name);
+
+        assert_eq!(Err(refusal.clone()), scheme.check(&values), "{name}");
+        assert_eq!(refusal.category(), None, "{name}");
+    }
+}
+
+#[test]
+fn takes_a_subject_apart_as_well_as_its_text() {
+    let scheme = workshops();
+    let subject = scheme.build(&["acme", "es-cqrs"]);
+
+    assert_eq!(
+        scheme.match_subject(&subject),
+        scheme.match_subject(subject.as_str())
+    );
+    assert_eq!(scheme.value(&subject, "tenant"), Some("acme"));
+    assert_eq!(scheme.value(subject.as_str(), "tenant"), Some("acme"));
 }

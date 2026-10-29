@@ -12,7 +12,8 @@ use super::{
     fake::{Answer, Api, Fake, Reply, dead_client},
 };
 use crate::{
-    Categorized, Category, DomainError, Error, ExecuteError, Precondition, Store, Transient,
+    Categorized, Category, DomainError, Error, ExecuteError, Precondition, Store, Subject,
+    Transient,
 };
 
 const READ_EVENTS: &str = "/api/v1/read-events";
@@ -28,7 +29,7 @@ async fn refused(write: KitWrite, client: Client, note: &str) -> Error<DomainErr
     let store = Store::builder(client, SOURCE).build();
 
     write
-        .remark(&store, "/test", note, unconditionally)
+        .remark(&store, &Subject::new("/test"), note, unconditionally)
         .await
         .expect_err("the database refuses the write")
 }
@@ -69,9 +70,10 @@ async fn keeps_its_category_if_the_database_can_not_be_reached() {
             "{write:?}: trying again can not store the events twice: {failure:?}"
         );
         assert!(
-            failure
-                .to_string()
-                .starts_with(&format!("transient failure: {}", write.doing("/test"))),
+            failure.to_string().starts_with(&format!(
+                "transient failure: {}",
+                write.doing(&Subject::new("/test"))
+            )),
             "{write:?}: {failure}"
         );
         assert!(
@@ -268,9 +270,10 @@ async fn leaves_the_outcome_unknown_if_the_request_has_left_but_no_answer_says_t
 
             assert_outcome_unknown(&failure, &format!("{write:?}, {name}"));
             assert!(
-                failure
-                    .to_string()
-                    .starts_with(&format!("outcome unknown: {}", write.doing("/test"))),
+                failure.to_string().starts_with(&format!(
+                    "outcome unknown: {}",
+                    write.doing(&Subject::new("/test"))
+                )),
                 "{write:?}, {name}: the message names the write after the outcome: {failure}"
             );
             if let Some(detail) = detail {

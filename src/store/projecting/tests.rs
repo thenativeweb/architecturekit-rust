@@ -26,8 +26,8 @@ use tokio_util::sync::CancellationToken;
 use super::{RebuildWriter, ResumableWriter, TransactionalWriter, Writer, bound_after, drive};
 use crate::{
     Categorized, Category, Envelope, Event, Events, Failure, InMemoryView, Permanent, Projection,
-    ProjectionError, ResumableProjection, Revisioned, Transaction, TransactionalProjection,
-    UpcastEvent, Upcasters, projection::tests::stored,
+    ProjectionError, ResumableProjection, Revision, Revisioned, Transaction,
+    TransactionalProjection, UpcastEvent, Upcasters, projection::tests::stored,
 };
 
 /// What the projection of a test was asked to do, in order.
@@ -70,9 +70,9 @@ impl Categorized for Refused {
 #[derive(Default)]
 struct Recording {
     log: Log,
-    refuses: Option<&'static str>,
+    refuses: Option<u32>,
     batch_size: usize,
-    checkpoint: Mutex<Option<String>>,
+    checkpoint: Mutex<Option<Revision>>,
 }
 
 impl Projection for Recording {
@@ -82,7 +82,7 @@ impl Projection for Recording {
     async fn apply(&self, event: Envelope<Self::Event>) -> Result<(), Refused> {
         tokio::task::yield_now().await;
         self.log.push(format!("apply {}", event.id));
-        if self.refuses == Some(event.id.as_str()) {
+        if self.refuses.map(Revision::from) == Some(event.id) {
             return Err(Refused(Category::Domain));
         }
 
@@ -91,22 +91,21 @@ impl Projection for Recording {
 }
 
 impl ResumableProjection for Recording {
-    async fn checkpoint(&self) -> Result<Option<String>, Refused> {
+    async fn checkpoint(&self) -> Result<Option<Revision>, Refused> {
         tokio::task::yield_now().await;
-        Ok(self
+        Ok(*self
             .checkpoint
             .lock()
-            .expect("the checkpoint is not poisoned")
-            .clone())
+            .expect("the checkpoint is not poisoned"))
     }
 
-    async fn save_checkpoint(&self, event_id: &str) -> Result<(), Refused> {
+    async fn save_checkpoint(&self, event_id: Revision) -> Result<(), Refused> {
         tokio::task::yield_now().await;
         self.log.push(format!("save {event_id}"));
         *self
             .checkpoint
             .lock()
-            .expect("the checkpoint is not poisoned") = Some(event_id.to_owned());
+            .expect("the checkpoint is not poisoned") = Some(event_id);
 
         Ok(())
     }
@@ -125,8 +124,8 @@ impl ResumableProjection for Recording {
 )]
 struct Trouble {
     refuses_to_begin: bool,
-    refuses_to_apply: Option<&'static str>,
-    panics_in_apply: Option<&'static str>,
+    refuses_to_apply: Option<u32>,
+    panics_in_apply: Option<u32>,
     refuses_to_commit: bool,
     refuses_to_roll_back: bool,
     panics_in_rollback: bool,
@@ -149,7 +148,7 @@ impl TransactionalProjection for Ledger {
     type Error = Refused;
     type Transaction = Booking;
 
-    async fn checkpoint(&self) -> Result<Option<String>, Refused> {
+    async fn checkpoint(&self) -> Result<Option<Revision>, Refused> {
         tokio::task::yield_now().await;
         Ok(None)
     }
@@ -180,18 +179,18 @@ impl Transaction for Booking {
         tokio::task::yield_now().await;
         self.log.push(format!("apply {}", event.id));
         assert!(
-            self.trouble.panics_in_apply != Some(event.id.as_str()),
+            self.trouble.panics_in_apply.map(Revision::from) != Some(event.id),
             "applying {}",
             event.id
         );
-        if self.trouble.refuses_to_apply == Some(event.id.as_str()) {
+        if self.trouble.refuses_to_apply.map(Revision::from) == Some(event.id) {
             return Err(Refused(Category::Domain));
         }
 
         Ok(())
     }
 
-    async fn commit(self, last_event_id: &str) -> Result<(), Refused> {
+    async fn commit(self, last_event_id: Revision) -> Result<(), Refused> {
         tokio::task::yield_now().await;
         self.log.push(format!("commit {last_event_id}"));
         if self.trouble.refuses_to_commit {
@@ -249,7 +248,7 @@ async fn drive_all<W: Writer>(
     ids: &[&str],
     failure: Option<ClientError>,
     batch_size: usize,
-) -> (Option<String>, Result<(), ProjectionError>, Vec<String>) {
+) -> (Option<Revision>, Result<(), ProjectionError>, Vec<String>) {
     let mut committed = Vec::new();
     let (last, result) = drive(
         writer,
@@ -257,7 +256,7 @@ async fn drive_all<W: Writer>(
         verified,
         batch_size,
         &CancellationToken::new(),
-        |id| committed.push(id.to_owned()),
+        |id| committed.push(id.to_string()),
     )
     .await;
 
@@ -280,12 +279,12 @@ async fn keeps_no_checkpoint_in_rebuild_mode_but_the_last_event_of_the_run() {
     let (last, result, committed) = drive_all(&mut writer, &["0", "1"], None, 1).await;
 
     result.expect("the events are applied");
-    assert_eq!(last.as_deref(), Some("1"));
+    assert_eq!(last, Some(Revision::from(1)));
     assert_eq!(committed, ["0", "1"]);
     assert_eq!(projection.log.entries(), ["apply 0", "apply 1"]);
     assert_eq!(
-        writer.checkpoint().await.expect("checkpoint").as_deref(),
-        Some("1")
+        writer.checkpoint().await.expect("checkpoint"),
+        Some(Revision::from(1))
     );
 }
 
@@ -349,7 +348,7 @@ async fn brackets_each_batch_in_a_transaction() {
 #[tokio::test]
 async fn rolls_back_when_apply_fails_and_keeps_the_category_of_the_projection() {
     let ledger = ledger_with(Trouble {
-        refuses_to_apply: Some("1"),
+        refuses_to_apply: Some(1),
         ..Trouble::default()
     });
 
@@ -363,7 +362,7 @@ async fn rolls_back_when_apply_fails_and_keeps_the_category_of_the_projection() 
 
     let failure = result.expect_err("the projection refuses");
     assert_eq!(failure.category(), Some(Category::Domain));
-    assert_eq!(last.as_deref(), Some("0"));
+    assert_eq!(last, Some(Revision::from(0)));
     assert_eq!(committed, Vec::<String>::new());
     assert_eq!(
         ledger.log.entries(),
@@ -464,7 +463,7 @@ async fn stops_when_a_commit_fails_without_rolling_back() {
 #[tokio::test]
 async fn reports_a_failing_rollback_alongside_the_cause() {
     for (name, refuses_to_apply, failure, cause_category) in [
-        ("after a refusal", Some("0"), None, Category::Domain),
+        ("after a refusal", Some(0), None, Category::Domain),
         (
             "after a broken stream",
             None,
@@ -482,11 +481,11 @@ async fn reports_a_failing_rollback_alongside_the_cause() {
             drive_all(&mut TransactionalWriter::new(&ledger), &["0"], failure, 5).await;
 
         let failure = result.expect_err(name);
-        let ProjectionError::RolledBack { cause, rollback } = &failure else {
+        let ProjectionError::RollbackFailed { cause, error } = &failure else {
             panic!("{name}: the rollback fails as well, got {failure:?}");
         };
         assert_eq!(cause.category(), Some(cause_category), "{name}");
-        assert_eq!(rollback.category(), Some(Category::Permanent), "{name}");
+        assert_eq!(error.category(), Some(Category::Permanent), "{name}");
         assert_eq!(
             failure.category(),
             Some(cause_category),
@@ -498,7 +497,7 @@ async fn reports_a_failing_rollback_alongside_the_cause() {
 #[tokio::test]
 async fn rolls_the_transaction_back_when_apply_panics() {
     let ledger = ledger_with(Trouble {
-        panics_in_apply: Some("1"),
+        panics_in_apply: Some(1),
         ..Trouble::default()
     });
 
@@ -534,7 +533,7 @@ async fn reports_a_panic_in_rollback_alongside_its_cause_and_makes_it_permanent(
     .await;
 
     let failure = result.expect_err("the stream breaks, and the rollback panics");
-    let ProjectionError::RolledBack { cause, .. } = &failure else {
+    let ProjectionError::RollbackFailed { cause, .. } = &failure else {
         panic!("the rollback is reported alongside its cause, got {failure:?}");
     };
     assert!(matches!(**cause, ProjectionError::Transient(_)));
@@ -566,15 +565,15 @@ async fn goes_on_from_the_last_event_it_applied_although_the_batch_was_cut_short
         "the checkpoint was never saved"
     );
     assert_eq!(
-        writer.checkpoint().await.expect("checkpoint").as_deref(),
-        Some("1")
+        writer.checkpoint().await.expect("checkpoint"),
+        Some(Revision::from(1))
     );
 }
 
 #[tokio::test]
 async fn does_not_count_an_event_it_failed_to_apply() {
     let projection = Recording {
-        refuses: Some("1"),
+        refuses: Some(1),
         ..Recording::default()
     };
     let mut writer = ResumableWriter::new(&projection);
@@ -582,10 +581,10 @@ async fn does_not_count_an_event_it_failed_to_apply() {
     let (last, result, _) = drive_all(&mut writer, &["0", "1"], None, 5).await;
 
     assert!(result.is_err());
-    assert_eq!(last.as_deref(), Some("0"));
+    assert_eq!(last, Some(Revision::from(0)));
     assert_eq!(
-        writer.checkpoint().await.expect("checkpoint").as_deref(),
-        Some("0")
+        writer.checkpoint().await.expect("checkpoint"),
+        Some(Revision::from(0))
     );
 }
 
@@ -595,7 +594,7 @@ async fn are_harmless_without_transactions() {
 
     let mut rebuild = RebuildWriter::new(&projection);
     rebuild.begin().await.expect("begin");
-    rebuild.commit("0").await.expect("commit");
+    rebuild.commit(Revision::from(0)).await.expect("commit");
     rebuild.rollback().await.expect("rollback");
 
     let mut resumable = ResumableWriter::new(&projection);
@@ -667,7 +666,7 @@ static SPLITTING: LazyLock<Upcasters> = LazyLock::new(|| {
 #[derive(Default)]
 struct Seeing {
     log: Log,
-    refuses: Option<&'static str>,
+    refuses: Option<u32>,
 }
 
 impl Projection for Seeing {
@@ -677,7 +676,7 @@ impl Projection for Seeing {
     async fn apply(&self, event: Envelope<Counted>) -> Result<(), Refused> {
         tokio::task::yield_now().await;
         self.log.push(format!("apply {}/{}", event.id, event.part));
-        if self.refuses == Some(event.id.as_str()) {
+        if self.refuses.map(Revision::from) == Some(event.id) {
             return Err(Refused(Category::Domain));
         }
 
@@ -688,18 +687,18 @@ impl Projection for Seeing {
         Some(&SPLITTING)
     }
 
-    fn seen(&self, event_id: &str) {
+    fn seen(&self, event_id: Revision) {
         self.log.push(format!("seen {event_id}"));
     }
 }
 
 impl ResumableProjection for Seeing {
-    async fn checkpoint(&self) -> Result<Option<String>, Refused> {
+    async fn checkpoint(&self) -> Result<Option<Revision>, Refused> {
         tokio::task::yield_now().await;
         Ok(None)
     }
 
-    async fn save_checkpoint(&self, event_id: &str) -> Result<(), Refused> {
+    async fn save_checkpoint(&self, event_id: Revision) -> Result<(), Refused> {
         tokio::task::yield_now().await;
         self.log.push(format!("save {event_id}"));
 
@@ -804,7 +803,7 @@ async fn records_a_split_event_once_every_part_is_applied() {
 #[tokio::test]
 async fn does_not_record_a_failed_event() {
     let projection = Seeing {
-        refuses: Some("1"),
+        refuses: Some(1),
         ..Seeing::default()
     };
 
@@ -839,7 +838,7 @@ impl Projection for Library {
         Ok(())
     }
 
-    fn seen(&self, event_id: &str) {
+    fn seen(&self, event_id: Revision) {
         for view in [&self.books, &self.shelves, &self.readers] {
             view.seen(event_id);
         }
@@ -869,7 +868,7 @@ async fn records_every_event_in_every_view() {
     ] {
         assert_eq!(
             view.revision().now_or_never(),
-            Some(Ok(Some("4".to_owned()))),
+            Some(Ok(Some(Revision::from(4)))),
             "the view {name} has to record the events"
         );
     }

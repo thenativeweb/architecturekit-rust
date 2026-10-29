@@ -1,8 +1,8 @@
 use std::{error::Error, fmt};
 
 use crate::{
-    Categorized, Category, EmptyRange, Failure, NotARevision, Permanent, PreconditionsError,
-    ReadOptionsError, Transient,
+    Categorized, Category, EmptyRange, Failure, Permanent, PreconditionsError, ReadOptionsError,
+    Transient,
 };
 
 use super::failure::{Sorted, WriteSorted};
@@ -91,9 +91,6 @@ pub enum WriteError {
     /// [`Precondition::on_event_id`](crate::Precondition::on_event_id). It
     /// belongs to no category.
     OutcomeUnknown(Failure),
-    /// An ID of [`Precondition::on_event_id`](crate::Precondition::on_event_id)
-    /// is not a revision, so nothing was written. It belongs to no category.
-    NotARevision(NotARevision),
 }
 
 impl From<WriteSorted> for WriteError {
@@ -110,7 +107,6 @@ impl From<PreconditionsError> for WriteError {
     fn from(refusal: PreconditionsError) -> Self {
         match refusal {
             PreconditionsError::Permanent(failure) => Self::Permanent(failure),
-            PreconditionsError::NotARevision(refusal) => Self::NotARevision(refusal),
         }
     }
 }
@@ -127,7 +123,6 @@ impl fmt::Display for WriteError {
             Self::Transient(failure) => failure.fmt(formatter),
             Self::Permanent(failure) => failure.fmt(formatter),
             Self::OutcomeUnknown(failure) => fmt_outcome_unknown(failure, formatter),
-            Self::NotARevision(refusal) => refusal.fmt(formatter),
         }
     }
 }
@@ -138,7 +133,6 @@ impl Error for WriteError {
             Self::Transient(failure) => failure.source(),
             Self::Permanent(failure) => failure.source(),
             Self::OutcomeUnknown(failure) => source_of_outcome_unknown(failure),
-            Self::NotARevision(refusal) => refusal.source(),
         }
     }
 }
@@ -148,7 +142,7 @@ impl Categorized for WriteError {
         match self {
             Self::Transient(failure) => failure.category(),
             Self::Permanent(failure) => failure.category(),
-            Self::OutcomeUnknown(_) | Self::NotARevision(_) => None,
+            Self::OutcomeUnknown(_) => None,
         }
     }
 }
@@ -232,10 +226,6 @@ pub enum ExecuteError<D> {
     /// revision the command was decided on. The kit never tries it again by
     /// itself, not even with conflict retries. It belongs to no category.
     OutcomeUnknown(Failure),
-    /// An ID of [`Precondition::on_event_id`](crate::Precondition::on_event_id)
-    /// is not a revision, so nothing was read or written. It belongs to no
-    /// category.
-    NotARevision(NotARevision),
 }
 
 impl<D> From<LoadError> for ExecuteError<D> {
@@ -253,7 +243,6 @@ impl<D> From<WriteError> for ExecuteError<D> {
             WriteError::Transient(failure) => Self::Transient(failure),
             WriteError::Permanent(failure) => Self::Permanent(failure),
             WriteError::OutcomeUnknown(failure) => Self::OutcomeUnknown(failure),
-            WriteError::NotARevision(refusal) => Self::NotARevision(refusal),
         }
     }
 }
@@ -262,7 +251,6 @@ impl<D> From<PreconditionsError> for ExecuteError<D> {
     fn from(refusal: PreconditionsError) -> Self {
         match refusal {
             PreconditionsError::Permanent(failure) => Self::Permanent(failure),
-            PreconditionsError::NotARevision(refusal) => Self::NotARevision(refusal),
         }
     }
 }
@@ -280,7 +268,6 @@ impl<D: fmt::Display> fmt::Display for ExecuteError<D> {
             Self::Transient(failure) => failure.fmt(formatter),
             Self::Permanent(failure) => failure.fmt(formatter),
             Self::OutcomeUnknown(failure) => fmt_outcome_unknown(failure, formatter),
-            Self::NotARevision(refusal) => refusal.fmt(formatter),
         }
     }
 }
@@ -292,7 +279,6 @@ impl<D: Error + 'static> Error for ExecuteError<D> {
             Self::Transient(failure) => failure.source(),
             Self::Permanent(failure) => failure.source(),
             Self::OutcomeUnknown(failure) => source_of_outcome_unknown(failure),
-            Self::NotARevision(refusal) => refusal.source(),
         }
     }
 }
@@ -303,12 +289,13 @@ impl<D: Categorized> Categorized for ExecuteError<D> {
             Self::Decider(failure) => failure.category(),
             Self::Transient(failure) => failure.category(),
             Self::Permanent(failure) => failure.category(),
-            Self::OutcomeUnknown(_) | Self::NotARevision(_) => None,
+            Self::OutcomeUnknown(_) => None,
         }
     }
 }
 
-/// Why reading events failed.
+/// Why reading events failed. It has exactly the cases reading can end in, as
+/// the error of every operation does, so that a `match` handles all of them.
 #[derive(Debug)]
 pub enum ReadError {
     /// Trying again later may succeed, for example once the database can be
@@ -317,9 +304,6 @@ pub enum ReadError {
     /// Trying again will not help, for example since an event failed its
     /// verification, or the database refuses the read.
     Permanent(Permanent),
-    /// An ID of a bound is not the ID of an event, so nothing was read. It
-    /// belongs to no category.
-    NotARevision(NotARevision),
     /// The bounds leave no room for an event, so nothing was read. It belongs
     /// to no category.
     EmptyRange(EmptyRange),
@@ -343,7 +327,6 @@ impl From<Permanent> for ReadError {
 impl From<ReadOptionsError> for ReadError {
     fn from(refusal: ReadOptionsError) -> Self {
         match refusal {
-            ReadOptionsError::NotARevision(refusal) => Self::NotARevision(refusal),
             ReadOptionsError::EmptyRange(refusal) => Self::EmptyRange(refusal),
         }
     }
@@ -354,7 +337,6 @@ impl fmt::Display for ReadError {
         match self {
             Self::Transient(failure) => failure.fmt(formatter),
             Self::Permanent(failure) => failure.fmt(formatter),
-            Self::NotARevision(refusal) => refusal.fmt(formatter),
             Self::EmptyRange(refusal) => refusal.fmt(formatter),
         }
     }
@@ -365,7 +347,6 @@ impl Error for ReadError {
         match self {
             Self::Transient(failure) => failure.source(),
             Self::Permanent(failure) => failure.source(),
-            Self::NotARevision(refusal) => refusal.source(),
             Self::EmptyRange(refusal) => refusal.source(),
         }
     }
@@ -376,7 +357,7 @@ impl Categorized for ReadError {
         match self {
             Self::Transient(failure) => failure.category(),
             Self::Permanent(failure) => failure.category(),
-            Self::NotARevision(_) | Self::EmptyRange(_) => None,
+            Self::EmptyRange(_) => None,
         }
     }
 }
