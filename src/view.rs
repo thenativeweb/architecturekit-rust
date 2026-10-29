@@ -739,7 +739,10 @@ impl<K, T> Debug for InMemoryView<K, T> {
     }
 }
 
-/// What a change of an [`InMemoryView`] did.
+/// What a change of an [`InMemoryView`] did to the one item it concerns. A
+/// change of several items, such as [`InMemoryView::update_where`] or
+/// [`InMemoryIndex::update`](crate::InMemoryIndex::update), reports how many
+/// it changed instead, since each of them may fare differently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// The change was applied to an item.

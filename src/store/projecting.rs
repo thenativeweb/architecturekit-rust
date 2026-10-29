@@ -26,7 +26,7 @@ use super::{
     verify,
 };
 use crate::{
-    Categorized, Category, Failure, Permanent, Projected, Projection, ProjectionError,
+    Categorized, Category, Envelope, Failure, Permanent, Projected, Projection, ProjectionError,
     ProjectionOptions, ProjectionRun, Reconnect, ResumableProjection, Revision, Subjects,
     Transaction, TransactionalProjection, Transient, revision::id_of,
 };
@@ -70,7 +70,7 @@ pub(crate) trait Writer: Send {
 async fn project<E: Projected, F: Future<Output = Result<(), ProjectionError>>>(
     event: &eventsourcingdb::Event,
     upcasters: Option<&crate::Upcasters>,
-    mut apply: impl FnMut(crate::Envelope<E>) -> F,
+    mut apply: impl FnMut(Envelope<E>) -> F,
 ) -> Result<(), ProjectionError> {
     for envelope in E::project(event, upcasters)? {
         apply(envelope).await?;
@@ -117,16 +117,9 @@ where
         id: Revision,
     ) -> Result<(), ProjectionError> {
         let projection = &*self.projection;
-        project(
-            event,
-            <R::Target as Projection>::upcasters(),
-            |envelope| async move {
-                projection
-                    .apply(envelope)
-                    .await
-                    .map_err(ProjectionError::of)
-            },
-        )
+        project(event, <R::Target as Projection>::upcasters(), |envelope| {
+            applying(projection, envelope, id)
+        })
         .await?;
         projection.seen(id);
         self.last_applied = Some(id);
@@ -192,16 +185,9 @@ where
         id: Revision,
     ) -> Result<(), ProjectionError> {
         let projection = &*self.projection;
-        project(
-            event,
-            <R::Target as Projection>::upcasters(),
-            |envelope| async move {
-                projection
-                    .apply(envelope)
-                    .await
-                    .map_err(ProjectionError::of)
-            },
-        )
+        project(event, <R::Target as Projection>::upcasters(), |envelope| {
+            applying(projection, envelope, id)
+        })
         .await?;
         projection.seen(id);
         self.last_applied = Some(id);
@@ -278,7 +264,7 @@ where
     async fn apply(
         &mut self,
         event: &eventsourcingdb::Event,
-        _: Revision,
+        id: Revision,
     ) -> Result<(), ProjectionError> {
         let transaction = self
             .transaction
@@ -292,8 +278,8 @@ where
             AssertUnwindSafe(transaction.apply(envelope))
                 .catch_unwind()
                 .await
-                .map_err(|payload| ProjectionError::panicked(&*payload))?
-                .map_err(ProjectionError::of)?;
+                .map_err(|payload| ProjectionError::panicked(&*payload).at_event(id))?
+                .map_err(|error| ProjectionError::of(error).at_event(id))?;
         }
 
         Ok(())
@@ -348,6 +334,20 @@ async fn roll_back<W: Writer>(writer: &mut W, cause: ProjectionError) -> Project
             error: Box::new(error),
         },
     }
+}
+
+/// Lets a projection apply an envelope, and names the event of a failure or a
+/// panic of it, which ends the run as a panic outside of it does.
+async fn applying<P: Projection + ?Sized>(
+    projection: &P,
+    envelope: Envelope<P::Event>,
+    id: Revision,
+) -> Result<(), ProjectionError> {
+    AssertUnwindSafe(projection.apply(envelope))
+        .catch_unwind()
+        .await
+        .map_err(|payload| ProjectionError::panicked(&*payload).at_event(id))?
+        .map_err(|error| ProjectionError::of(error).at_event(id))
 }
 
 /// Applies the events in batches of the given size, and returns the ID of the
@@ -710,7 +710,7 @@ impl Store {
         token: CancellationToken,
         options: ProjectionOptions,
     ) -> ProjectionRun {
-        let run = ProjectionRun::new(options);
+        let run = ProjectionRun::new(subjects.subject().clone(), options);
         let reader = self.reader();
         let reconnecting = self.reconnecting.clone();
 

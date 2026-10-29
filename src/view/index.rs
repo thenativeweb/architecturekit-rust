@@ -14,7 +14,9 @@ use crate::Envelope;
 
 /// A secondary index of an [`InMemoryView`], created with
 /// [`InMemoryView::index`], which finds the items by a value taken from them,
-/// such as the shelf they stand on. Several items may share a value.
+/// such as the shelf they stand on. Several items may share a value, so a
+/// change through the index reports how many items it changed rather than an
+/// [`Outcome`](crate::Outcome).
 pub struct InMemoryIndex<K, T, V> {
     view: Arc<Shared<K, T>>,
     pub(super) index: Arc<Index<K, T, V>>,

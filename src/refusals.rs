@@ -256,7 +256,10 @@ pub struct LiteralEnvelope;
 /// ```compile_fail
 /// fn message_of(failure: &architecturekit::ProjectionError) -> Option<&str> {
 ///     match failure {
-///         architecturekit::ProjectionError::Panicked { message } => Some(message),
+///         architecturekit::ProjectionError::Panicked {
+///             message,
+///             event_id: _,
+///         } => Some(message),
 ///         _ => None,
 ///     }
 /// }

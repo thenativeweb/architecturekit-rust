@@ -233,7 +233,8 @@ pub fn stored_events_at<E: Events>(
 ///
 /// Fails with the first failure, of an upcaster, of decoding an event, or of
 /// the projection, which a test checks to see that a projection refuses an
-/// event. A panic of the projection is not caught, and fails the test.
+/// event. A panic in [`Projection::apply`] is reported as
+/// [`ProjectionError::Panicked`], with the event, as in a run.
 pub async fn project<P: Projection>(
     projection: &P,
     events: &[StoredEvent],

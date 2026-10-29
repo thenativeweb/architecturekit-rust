@@ -57,7 +57,8 @@ enum Logged {
 ///
 /// A view that did not catch up with a write, which
 /// [`wait_for_written`](crate::wait_for_written) reports as
-/// [`NotCaughtUp`](crate::NotCaughtUp), does not turn into it: the command has
+/// [`NotCaughtUp`](crate::NotCaughtUp), does not turn into it with `?`: the
+/// command has
 /// succeeded, so it is answered as the success it is, with
 /// [`CommandAnswer::with_result`](super::CommandAnswer::with_result).
 #[derive(Debug)]

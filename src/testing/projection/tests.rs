@@ -352,10 +352,54 @@ async fn reports_a_refusal() {
         .await
         .expect_err("the projection refuses the event");
 
-    assert_eq!(failure.to_string(), "the opening can not be decoded");
+    assert_eq!(
+        failure.to_string(),
+        "applying event 0: the opening can not be decoded"
+    );
     assert!(
         matches!(&failure, ProjectionError::Projection { error, .. } if error.is::<Refused>()),
         "the error of the projection has to be kept: {failure:?}"
+    );
+}
+
+/// A projection of the stored events that panics at a closing.
+struct PanickingAtClosings;
+
+impl Projection for PanickingAtClosings {
+    type Event = eventsourcingdb::Event;
+    type Error = Refused;
+
+    async fn apply(&self, event: Envelope<eventsourcingdb::Event>) -> Result<(), Refused> {
+        tokio::task::yield_now().await;
+        assert!(
+            event.event_type != Closed::EVENT_TYPE,
+            "closing {}",
+            event.id
+        );
+
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn reports_a_panic_as_a_run_does() {
+    let failure = project(
+        &PanickingAtClosings,
+        &stored_events(&Subject::new("/account/1"), [opened("golo"), closed()]),
+    )
+    .await
+    .expect_err("the projection panics at the closing");
+
+    assert!(
+        matches!(
+            failure,
+            ProjectionError::Panicked { event_id: Some(id), .. } if id == Revision::from(1)
+        ),
+        "{failure:?}"
+    );
+    assert_eq!(
+        failure.to_string(),
+        "permanent failure: applying event 1: the projection panicked: closing 1"
     );
 }
 
@@ -556,7 +600,7 @@ async fn rolls_back_on_a_refusal() {
     );
     assert_eq!(
         failure.to_string(),
-        "only openings, please, and rolling back failed: rollback did not work either"
+        "applying event 1: only openings, please, and rolling back failed: rollback did not work either"
     );
     assert_eq!(table.log.entries(), ["begin", "apply 0", "rollback"]);
 }
