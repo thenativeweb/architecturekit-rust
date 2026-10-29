@@ -582,8 +582,9 @@ async fn write_past_the_kit(
         .await
 }
 
-/// Asserts that the database refused a write for the given subject as
-/// malformed: with the code subject-malformed, or, from a database that offers
+/// Asserts that the database refused a write for the given subject: as
+/// malformed, with the code subject-malformed, or, for an empty one, as
+/// missing, with the code subject-missing, or, from a database that offers
 /// just the v1 API, which reports it without a code, with a description that
 /// says so.
 fn assert_malformed_subject(failure: &ClientError, value: &str) {
@@ -593,6 +594,11 @@ fn assert_malformed_subject(failure: &ClientError, value: &str) {
     if answer.code.is_empty() {
         assert!(
             answer.description.contains("malformed subject"),
+            "{value:?}: {answer:?}"
+        );
+    } else if value.is_empty() {
+        assert!(
+            [code::SUBJECT_MALFORMED, code::SUBJECT_MISSING].contains(&answer.code.as_str()),
             "{value:?}: {answer:?}"
         );
     } else {
