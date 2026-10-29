@@ -1,6 +1,7 @@
 // These tests check driving projections: the size of batches, the bound after
 // a checkpoint, the writers and the resumable writer, and a projection that
-// panics within a transaction, with streams made up by the tests. A
+// fails or panics, also within a transaction, with streams made up by the
+// tests. A
 // projection names its kind by its trait, and a projection of a single
 // function needs the types of its events and its error, so it is an ordinary
 // type.
@@ -65,12 +66,13 @@ impl Categorized for Refused {
     }
 }
 
-/// A projection that records what it is asked to do, and refuses the event
-/// a test names.
+/// A projection that records what it is asked to do, and refuses or panics at
+/// the event a test names.
 #[derive(Default)]
 struct Recording {
     log: Log,
     refuses: Option<u32>,
+    panics: Option<u32>,
     batch_size: usize,
     checkpoint: Mutex<Option<Revision>>,
 }
@@ -82,6 +84,11 @@ impl Projection for Recording {
     async fn apply(&self, event: Envelope<Self::Event>) -> Result<(), Refused> {
         tokio::task::yield_now().await;
         self.log.push(format!("apply {}", event.id));
+        assert!(
+            self.panics.map(Revision::from) != Some(event.id),
+            "applying {}",
+            event.id
+        );
         if self.refuses.map(Revision::from) == Some(event.id) {
             return Err(Refused(Category::Domain));
         }
@@ -509,7 +516,7 @@ async fn rolls_the_transaction_back_when_apply_panics() {
     assert_eq!(failure.category(), Some(Category::Permanent));
     assert_eq!(
         failure.to_string(),
-        "permanent failure: the projection panicked: applying 1"
+        "permanent failure: applying event 1: the projection panicked: applying 1"
     );
     assert_eq!(
         ledger.log.entries(),
@@ -533,16 +540,126 @@ async fn reports_a_panic_in_rollback_alongside_its_cause_and_makes_it_permanent(
     .await;
 
     let failure = result.expect_err("the stream breaks, and the rollback panics");
-    let ProjectionError::RollbackFailed { cause, .. } = &failure else {
+    let ProjectionError::RollbackFailed { cause, error } = &failure else {
         panic!("the rollback is reported alongside its cause, got {failure:?}");
     };
     assert!(matches!(**cause, ProjectionError::Transient(_)));
+    assert!(
+        matches!(**error, ProjectionError::Panicked { event_id: None, .. }),
+        "a rollback applies no event: {error:?}"
+    );
     assert!(failure.has_panicked());
     assert_eq!(
         failure.category(),
         Some(Category::Permanent),
         "a panic ends the run even if the cause may pass"
     );
+}
+
+/// Drives the events 0 and 1 through the writer, whose projection fails at
+/// event 1, and returns the failure.
+async fn failure_at_event_1<W: Writer>(mut writer: W) -> ProjectionError {
+    let (_, result, _) = drive_all(&mut writer, &["0", "1"], None, 5).await;
+
+    result.expect_err("the projection fails at event 1")
+}
+
+#[tokio::test]
+async fn names_the_event_a_projection_failed_or_panicked_at() {
+    let refusing = Recording {
+        refuses: Some(1),
+        ..Recording::default()
+    };
+    let panicking = Recording {
+        panics: Some(1),
+        ..Recording::default()
+    };
+    let refusing_ledger = ledger_with(Trouble {
+        refuses_to_apply: Some(1),
+        ..Trouble::default()
+    });
+    let panicking_ledger = ledger_with(Trouble {
+        panics_in_apply: Some(1),
+        ..Trouble::default()
+    });
+    let refused = "applying event 1: refused (domain rule violated)";
+    let panicked = "permanent failure: applying event 1: the projection panicked: applying 1";
+
+    for (name, failure, text) in [
+        (
+            "rebuilding, refused",
+            failure_at_event_1(RebuildWriter::new(&refusing)).await,
+            refused,
+        ),
+        (
+            "resuming, refused",
+            failure_at_event_1(ResumableWriter::new(&refusing)).await,
+            refused,
+        ),
+        (
+            "in a transaction, refused",
+            failure_at_event_1(TransactionalWriter::new(&refusing_ledger)).await,
+            refused,
+        ),
+        (
+            "rebuilding, panicked",
+            failure_at_event_1(RebuildWriter::new(&panicking)).await,
+            panicked,
+        ),
+        (
+            "resuming, panicked",
+            failure_at_event_1(ResumableWriter::new(&panicking)).await,
+            panicked,
+        ),
+        (
+            "in a transaction, panicked",
+            failure_at_event_1(TransactionalWriter::new(&panicking_ledger)).await,
+            panicked,
+        ),
+    ] {
+        assert!(
+            matches!(
+                failure,
+                ProjectionError::Projection { event_id: Some(id), .. }
+                    | ProjectionError::Panicked { event_id: Some(id), .. }
+                    if id == Revision::from(1)
+            ),
+            "{name}: {failure:?}"
+        );
+        assert_eq!(failure.to_string(), text, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn names_no_event_for_a_failure_outside_of_applying_one() {
+    for (name, trouble) in [
+        (
+            "begin",
+            Trouble {
+                refuses_to_begin: true,
+                ..Trouble::default()
+            },
+        ),
+        (
+            "commit",
+            Trouble {
+                refuses_to_commit: true,
+                ..Trouble::default()
+            },
+        ),
+    ] {
+        let ledger = ledger_with(trouble);
+
+        let (_, result, _) =
+            drive_all(&mut TransactionalWriter::new(&ledger), &["0"], None, 5).await;
+
+        let failure = result.expect_err(name);
+        assert!(
+            matches!(failure, ProjectionError::Projection { event_id: None, .. }),
+            "{name}: {failure:?}"
+        );
+        assert_eq!(failure.to_string(), "refused (transient failure)", "{name}");
+    }
 }
 
 #[tokio::test]

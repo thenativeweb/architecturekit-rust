@@ -354,7 +354,7 @@ async fn commits_a_transactional_projection_in_batches_and_then_every_event() {
 #[test]
 #[should_panic(expected = "architecturekit: a projection needs a name that is not empty, or none")]
 fn panics_for_an_empty_name() {
-    let _ = ProjectionRun::new(named(""));
+    let _ = ProjectionRun::new(Subject::root(), named(""));
 }
 
 // Reconnecting.
@@ -695,7 +695,7 @@ async fn ends_the_run_rather_than_the_task_when_the_projection_panics() {
 
     let error = run.error().expect("the run ends with a failure");
     assert!(
-        matches!(&*error, ProjectionError::Panicked { message } if message.starts_with("applying")),
+        matches!(&*error, ProjectionError::Panicked { message, .. } if message.starts_with("applying")),
         "{error:?}"
     );
 }
@@ -717,7 +717,7 @@ async fn ends_the_run_when_the_observer_of_reconnects_panics() {
 
     let error = run.error().expect("the run ends with a failure");
     assert!(
-        matches!(&*error, ProjectionError::Panicked { message } if message == "observing"),
+        matches!(&*error, ProjectionError::Panicked { message, .. } if message == "observing"),
         "{error:?}"
     );
 }
@@ -869,8 +869,8 @@ async fn names_a_run_that_ends_with_a_failure_before_it_caught_up() {
     let error = unnamed_run.error().expect("the run has failed");
     assert_eq!(
         failure.to_string(),
-        error.to_string(),
-        "the failure of a run without a name is left as it is"
+        format!(r#"projection of "/test": {error}"#),
+        "a run without a name is named by its subject"
     );
 }
 
@@ -895,7 +895,8 @@ async fn names_a_run_that_stopped_before_it_caught_up() {
         .expect_err("the run stopped");
     assert_eq!(
         failure.to_string(),
-        "the projection stopped before it caught up"
+        r#"the projection of "/test" stopped before it caught up"#,
+        "a run without a name is named by its subject"
     );
 }
 
@@ -922,7 +923,7 @@ async fn prefers_the_failure_of_a_run_to_a_run_that_stopped_and_names_the_first(
         .await
         .expect_err("the runs stopped");
     assert!(
-        matches!(&failure, CaughtUpError::Stopped { projection: Some(name) } if name == "also stopped"),
+        matches!(&failure, CaughtUpError::Stopped { projection: Some(name), .. } if name == "also stopped"),
         "{failure:?}"
     );
 }

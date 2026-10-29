@@ -2,7 +2,7 @@
 // event into what a projection gets. A projection names its events as an enum
 // or as the stored event, and is resumable by its trait.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use std::error::Error;
 
 use crate::{
-    Categorized, Category, Envelope, Event, Events, Failure, Permanent, Projected, ProjectionError,
-    Revision, State, Subject, Transient, UpcastEvent, Upcasters, replay_stored,
+    Categorized, Category, CaughtUpError, Envelope, Event, Events, Failure, Permanent, Projected,
+    ProjectionError, Revision, State, Subject, Transient, UpcastEvent, Upcasters, replay_stored,
 };
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Event)]
@@ -328,6 +328,7 @@ fn names_the_category_of_every_failure() {
     let failure = || Failure::new("failed", None);
     let panicked = ProjectionError::Panicked {
         message: "boom".to_owned(),
+        event_id: None,
     };
 
     for (name, error, category, has_panicked) in [
@@ -353,6 +354,7 @@ fn names_the_category_of_every_failure() {
             "panicked",
             ProjectionError::Panicked {
                 message: "boom".to_owned(),
+                event_id: None,
             },
             Some(Category::Permanent),
             true,
@@ -379,6 +381,40 @@ fn names_the_category_of_every_failure() {
         assert_eq!(error.category(), category, "{name}");
         assert_eq!(error.has_panicked(), has_panicked, "{name}");
     }
+}
+
+#[test]
+fn names_every_cause_once_along_the_sources() {
+    // A failure that wraps another names it in its text already, so it passes
+    // on the source of the inner one, and an error reporter that follows the
+    // sources shows every cause once.
+    let failure = CaughtUpError::Failed {
+        projection: None,
+        subject: Subject::new("/books"),
+        error: Arc::new(ProjectionError::RollbackFailed {
+            cause: Box::new(ProjectionError::Transient(Transient::Other(Failure::new(
+                "reading events",
+                Some(Box::new(std::io::Error::other("connection refused"))),
+            )))),
+            error: Box::new(ProjectionError::Permanent(Permanent::Other(Failure::new(
+                "rolling back",
+                None,
+            )))),
+        }),
+    };
+
+    let reported: &(dyn Error + 'static) = &failure;
+    let chain: Vec<String> = std::iter::successors(Some(reported), |&error| error.source())
+        .map(ToString::to_string)
+        .collect();
+
+    assert_eq!(
+        chain,
+        [
+            r#"projection of "/books": transient failure: reading events, and rolling back failed: permanent failure: rolling back"#,
+            "connection refused",
+        ]
+    );
 }
 
 #[test]

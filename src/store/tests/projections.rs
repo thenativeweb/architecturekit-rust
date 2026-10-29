@@ -465,7 +465,7 @@ async fn comes_back_from_catching_up_as_an_error_wherever_the_projection_panics(
     for (function, result) in failures {
         let failure = result.expect_err(function);
         assert!(
-            matches!(&failure, ProjectionError::Panicked { message } if message.contains(function)),
+            matches!(&failure, ProjectionError::Panicked { message, .. } if message.contains(function)),
             "{function}: {failure:?}"
         );
         assert_eq!(failure.category(), Some(Category::Permanent), "{function}");

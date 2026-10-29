@@ -413,6 +413,9 @@ pub enum ProjectionError {
     Panicked {
         /// The value the projection panicked with, if it is text.
         message: String,
+        /// The event the projection was applying, if it panicked while it
+        /// applied one, rather than at a checkpoint or a transaction.
+        event_id: Option<Revision>,
     },
     /// The projection itself failed, with the category its error names.
     #[non_exhaustive]
@@ -422,6 +425,9 @@ pub enum ProjectionError {
         /// The error of the projection, which a caller can downcast to its
         /// type.
         error: Box<dyn Error + Send + Sync + 'static>,
+        /// The event the projection was applying, if it failed while it
+        /// applied one, rather than at a checkpoint or a transaction.
+        event_id: Option<Revision>,
     },
     /// Rolling back a transaction failed after another failure, which the
     /// failure of the rollback is reported alongside, never instead of. Its
@@ -441,6 +447,26 @@ impl ProjectionError {
         Self::Projection {
             category: error.category(),
             error: Box::new(error),
+            event_id: None,
+        }
+    }
+
+    /// Names the event the projection was applying when it failed or panicked,
+    /// which a failure of anything else does not concern.
+    pub(crate) fn at_event(self, id: Revision) -> Self {
+        match self {
+            Self::Panicked { message, .. } => Self::Panicked {
+                message,
+                event_id: Some(id),
+            },
+            Self::Projection {
+                category, error, ..
+            } => Self::Projection {
+                category,
+                error,
+                event_id: Some(id),
+            },
+            other => other,
         }
     }
 
@@ -454,6 +480,7 @@ impl ProjectionError {
 
         Self::Panicked {
             message: message.to_owned(),
+            event_id: None,
         }
     }
 
@@ -479,12 +506,32 @@ impl fmt::Display for ProjectionError {
         match self {
             Self::Transient(failure) => failure.fmt(formatter),
             Self::Permanent(failure) => failure.fmt(formatter),
-            Self::Panicked { message } => write!(
+            Self::Panicked {
+                message,
+                event_id: Some(id),
+            } => write!(
+                formatter,
+                "{}: applying event {id}: the projection panicked: {message}",
+                Category::Permanent
+            ),
+            Self::Panicked {
+                message,
+                event_id: None,
+            } => write!(
                 formatter,
                 "{}: the projection panicked: {message}",
                 Category::Permanent
             ),
-            Self::Projection { error, .. } => error.fmt(formatter),
+            Self::Projection {
+                error,
+                event_id: Some(id),
+                ..
+            } => write!(formatter, "applying event {id}: {error}"),
+            Self::Projection {
+                error,
+                event_id: None,
+                ..
+            } => error.fmt(formatter),
             Self::RollbackFailed { cause, error } => {
                 write!(formatter, "{cause}, and rolling back failed: {error}")
             }
@@ -499,7 +546,8 @@ impl Error for ProjectionError {
             Self::Permanent(failure) => failure.source(),
             Self::Panicked { .. } => None,
             Self::Projection { error, .. } => error.source(),
-            Self::RollbackFailed { cause, .. } => Some(cause.as_ref()),
+            // The text names the cause already, so this passes on its source.
+            Self::RollbackFailed { cause, .. } => cause.source(),
         }
     }
 }

@@ -109,6 +109,7 @@ pub struct ProjectionRun {
 #[derive(Debug)]
 struct Inner {
     name: Option<String>,
+    subject: Subject,
     status: watch::Sender<ProjectionStatus>,
 }
 
@@ -118,7 +119,7 @@ impl ProjectionRun {
     /// # Panics
     ///
     /// A name that is empty is a programming error, so this panics.
-    pub(crate) fn new(options: ProjectionOptions) -> Self {
+    pub(crate) fn new(subject: Subject, options: ProjectionOptions) -> Self {
         assert!(
             options.name.as_deref() != Some(""),
             "architecturekit: a projection needs a name that is not empty, or none"
@@ -136,6 +137,7 @@ impl ProjectionRun {
         Self {
             inner: Arc::new(Inner {
                 name: options.name,
+                subject,
                 status,
             }),
         }
@@ -270,6 +272,7 @@ fn caught_up_verdict(runs: &[&ProjectionRun]) -> Option<Result<(), CaughtUpError
         if let Some(error) = status.error {
             return Some(Err(CaughtUpError::Failed {
                 projection: run.name().map(ToOwned::to_owned),
+                subject: run.inner.subject.clone(),
                 error,
             }));
         }
@@ -285,6 +288,7 @@ fn caught_up_verdict(runs: &[&ProjectionRun]) -> Option<Result<(), CaughtUpError
     stopped.map(|run| {
         Err(CaughtUpError::Stopped {
             projection: run.name().map(ToOwned::to_owned),
+            subject: run.inner.subject.clone(),
         })
     })
 }
@@ -299,6 +303,9 @@ pub enum CaughtUpError {
     Failed {
         /// The name of the projection, if it has one.
         projection: Option<String>,
+        /// The subject the projection reads, which tells it apart if it has
+        /// no name.
+        subject: Subject,
         /// The failure the run ended with.
         error: Arc<ProjectionError>,
     },
@@ -308,6 +315,9 @@ pub enum CaughtUpError {
     Stopped {
         /// The name of the projection, if it has one.
         projection: Option<String>,
+        /// The subject the projection reads, which tells it apart if it has
+        /// no name.
+        subject: Subject,
     },
 }
 
@@ -317,20 +327,28 @@ impl fmt::Display for CaughtUpError {
             Self::Failed {
                 projection: Some(name),
                 error,
+                ..
             } => write!(formatter, "projection {name:?}: {error}"),
             Self::Failed {
                 projection: None,
+                subject,
                 error,
-            } => error.fmt(formatter),
+            } => write!(formatter, "projection of {:?}: {error}", subject.as_str()),
             Self::Stopped {
                 projection: Some(name),
+                ..
             } => write!(
                 formatter,
                 "the projection {name:?} stopped before it caught up"
             ),
-            Self::Stopped { projection: None } => {
-                write!(formatter, "the projection stopped before it caught up")
-            }
+            Self::Stopped {
+                projection: None,
+                subject,
+            } => write!(
+                formatter,
+                "the projection of {:?} stopped before it caught up",
+                subject.as_str()
+            ),
         }
     }
 }
@@ -338,7 +356,9 @@ impl fmt::Display for CaughtUpError {
 impl Error for CaughtUpError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Failed { error, .. } => Some(error.as_ref()),
+            // The text names the failure already, so this passes on its
+            // source.
+            Self::Failed { error, .. } => error.source(),
             Self::Stopped { .. } => None,
         }
     }

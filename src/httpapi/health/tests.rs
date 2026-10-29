@@ -10,10 +10,12 @@ use http::{StatusCode, header};
 use serde_json::{Value, json};
 
 use super::Health;
-use crate::{Phase, ProjectionError, ProjectionOptions, ProjectionRun, ProjectionStatus, Revision};
+use crate::{
+    Phase, ProjectionError, ProjectionOptions, ProjectionRun, ProjectionStatus, Revision, Subject,
+};
 
 fn run(name: &str) -> ProjectionRun {
-    ProjectionRun::new(ProjectionOptions::named(name))
+    ProjectionRun::new(Subject::new("/books"), ProjectionOptions::named(name))
 }
 
 fn live(name: &str) -> ProjectionRun {
@@ -35,6 +37,7 @@ fn stopped(name: &str) -> ProjectionRun {
 fn unreachable() -> Arc<ProjectionError> {
     Arc::new(ProjectionError::Panicked {
         message: "connection to 127.0.0.1:3000 refused".to_owned(),
+        event_id: None,
     })
 }
 
@@ -99,6 +102,7 @@ fn is_neither_ready_nor_alive_once_a_projection_has_stopped() {
     let failed = live("loans");
     failed.stop(Some(ProjectionError::Panicked {
         message: "the checkpoint is broken".to_owned(),
+        event_id: None,
     }));
 
     for run in [ended, failed] {
@@ -205,7 +209,7 @@ fn keeps_watching_the_projections_it_was_given() {
 fn panics_for_a_projection_without_a_name() {
     let _ = Health::liveness([
         run("catalog"),
-        ProjectionRun::new(ProjectionOptions::default()),
+        ProjectionRun::new(Subject::new("/books"), ProjectionOptions::default()),
     ]);
 }
 
