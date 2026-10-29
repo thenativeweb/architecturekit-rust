@@ -304,8 +304,12 @@ pub async fn wait_for_written<V: Revisioned + ?Sized>(
 ///
 /// It belongs to no category. It is not transient, since trying the write
 /// again would store its events twice, and not permanent, since the view may
-/// still catch up. So it is usually answered as the success that the write is,
-/// with the revision of the events, for which the caller can wait itself.
+/// still catch up. So it is answered as the success that the write is, with
+/// the revision of the events, for which the caller can wait itself: over
+/// HTTP with `CommandAnswer::with_result` of the module `httpapi`, which logs
+/// that the view lags behind. It deliberately does not turn into an
+/// `HttpError` with `?`, which would answer a command that has succeeded as a
+/// failure.
 #[derive(Debug)]
 pub enum NotCaughtUp<E> {
     /// The view did not catch up within the timeout.

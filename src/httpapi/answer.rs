@@ -106,6 +106,28 @@ impl CommandAnswer {
     /// same, so the answer stays a success with the revision, which the caller
     /// needs to read its own writes, and must not take for a reason to send the
     /// command again. The failure is logged as an error.
+    ///
+    /// It is how a command answers with what it changed in a view, once the
+    /// view has caught up with its events, and as a success all the same if
+    /// the view lags behind:
+    ///
+    /// ```
+    /// # use std::time::Duration;
+    /// # use architecturekit::{InMemoryView, KeyedView, wait_for_written};
+    /// # use architecturekit::httpapi::CommandAnswer;
+    /// # async fn answer(
+    /// #     books: &InMemoryView<String, String>,
+    /// #     written: Vec<architecturekit::eventsourcingdb::Event>,
+    /// # ) -> CommandAnswer {
+    /// let title = async {
+    ///     wait_for_written(books, &written, Duration::from_secs(5)).await?;
+    ///     let Ok(title) = books.get("42").await;
+    ///     Ok::<_, architecturekit::NotCaughtUp<_>>(serde_json::json!({ "title": title }))
+    /// };
+    ///
+    /// CommandAnswer::new(&written).with_result(title.await)
+    /// # }
+    /// ```
     pub fn with_result<F, E>(self, fields: Result<F, E>) -> Self
     where
         F: Serialize,

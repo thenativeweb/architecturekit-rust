@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, sync::Arc};
 
 #[cfg(test)]
 mod tests;
@@ -75,6 +75,28 @@ impl fmt::Display for Category {
 pub trait Categorized {
     /// Returns the category of the error, or `None` if it belongs to none.
     fn category(&self) -> Option<Category>;
+}
+
+/// A reference to an error has the category of the error.
+impl<T: Categorized + ?Sized> Categorized for &T {
+    fn category(&self) -> Option<Category> {
+        (**self).category()
+    }
+}
+
+/// A boxed error has the category of the error, so that a decider can return
+/// a large error in a box.
+impl<T: Categorized + ?Sized> Categorized for Box<T> {
+    fn category(&self) -> Option<Category> {
+        (**self).category()
+    }
+}
+
+/// A shared error has the category of the error.
+impl<T: Categorized + ?Sized> Categorized for Arc<T> {
+    fn category(&self) -> Option<Category> {
+        (**self).category()
+    }
 }
 
 /// A business rule that refused a command, with a message for the caller.

@@ -6,8 +6,8 @@ use http::{Response, StatusCode};
 use super::answer::json;
 use crate::{
     Categorized, Category, EmptyRange, ExecuteError, LoadError, NotARevision, NotASubject,
-    NotCaughtUp, PreconditionsError, ReadError, ReadOptionsError, RegisterSchemasError,
-    SubjectValuesError, Transient, WriteError,
+    PreconditionsError, ReadError, ReadOptionsError, RegisterSchemasError, SubjectValuesError,
+    Transient, WriteError,
 };
 
 #[cfg(test)]
@@ -49,13 +49,17 @@ enum Logged {
 /// | [`Transient::Conflict`] | 409 | `conflict: the data has changed since it was read` |
 /// | a failure of the category [`Category::Transient`] | 503 | `internal server error` |
 /// | an unknown outcome of a write | 500 | `outcome unknown: the request may have succeeded` |
-/// | [`NotCaughtUp`] | 500 | `the request succeeded, but its result is not visible yet` |
 /// | any other failure | 500 | `internal server error` |
 ///
 /// The answer is JSON, such as `{"message":"unauthorized"}`, and it is never
-/// cached. A write whose outcome is unknown, and a view that did not catch up
-/// with a write, keep 500, so that a caller does not try again, which would
-/// store the events twice.
+/// cached. A write whose outcome is unknown keeps 500, so that a caller does
+/// not try again, which would store the events twice.
+///
+/// A view that did not catch up with a write, which
+/// [`wait_for_written`](crate::wait_for_written) reports as
+/// [`NotCaughtUp`](crate::NotCaughtUp), does not turn into it: the command has
+/// succeeded, so it is answered as the success it is, with
+/// [`CommandAnswer::with_result`](super::CommandAnswer::with_result).
 #[derive(Debug)]
 pub struct HttpError {
     status: StatusCode,
@@ -338,19 +342,6 @@ impl From<SubjectValuesError> for HttpError {
 impl From<EmptyRange> for HttpError {
     fn from(refusal: EmptyRange) -> Self {
         Self::told(StatusCode::BAD_REQUEST, refusal.to_string())
-    }
-}
-
-/// Answers a view that did not catch up with a write with 500 and a text of
-/// its own, which tells the caller that the write has succeeded, so that it
-/// does not try again, whatever made the view fail.
-impl<E: Error + Send + Sync + 'static> From<NotCaughtUp<E>> for HttpError {
-    fn from(error: NotCaughtUp<E>) -> Self {
-        Self::failed(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "the request succeeded, but its result is not visible yet",
-            Box::new(error),
-        )
     }
 }
 

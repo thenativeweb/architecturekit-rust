@@ -283,7 +283,7 @@ async fn borrow(
 | a write whose outcome is unknown | 500 | `outcome unknown: the request may have succeeded` |
 | any other failure | 500 | `internal server error` |
 
-A fixed message keeps internals from the caller, and its cause is logged with the `log` crate. Who may send a command is up to the application: it determines the user with an extractor of its own, and refuses with `HttpError::unauthorized` or `HttpError::forbidden`.
+A fixed message keeps internals from the caller, and its cause is logged with the `log` crate. The one error that does not turn into an `HttpError` is the one of `wait_for_written`, which waits until a view has seen what a command wrote: the command has succeeded, so it is answered as a success, with `CommandAnswer::with_result`, which logs that the view lags behind. Who may send a command is up to the application: it determines the user with an extractor of its own, and refuses with `HttpError::unauthorized` or `HttpError::forbidden`.
 
 A query is a handler of axum as well, which reads a view:
 

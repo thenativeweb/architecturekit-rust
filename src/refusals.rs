@@ -262,3 +262,16 @@ pub struct LiteralEnvelope;
 /// }
 /// ```
 pub struct PatternWithoutRest;
+
+/// A view that did not catch up with a write tells that the command has
+/// succeeded, so it does not turn into a failure of a request with `?`, but is
+/// answered as a success with `CommandAnswer::with_result`:
+///
+/// ```compile_fail
+/// fn answer(
+///     lag: architecturekit::NotCaughtUp<std::convert::Infallible>,
+/// ) -> Result<(), architecturekit::httpapi::HttpError> {
+///     Err(lag)?
+/// }
+/// ```
+pub struct NotCaughtUpAsAFailure;
