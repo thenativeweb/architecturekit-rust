@@ -6,8 +6,6 @@
 // - A slice of bytes is a list of numbers.
 // - A failure is told in words, and its cause, which serde gives as text, is
 //   not kept as an error of its own.
-// - serde takes a list of exactly as many values as a struct has fields for
-//   that struct.
 
 use std::collections::HashMap;
 
@@ -152,6 +150,16 @@ fn rejects_json_that_does_not_fit_and_says_why_in_words_of_its_own() {
             r#""delivery" must be an object"#,
         ),
         (
+            "a list with a value for every field where an object belongs",
+            r#"{"delivery":["Main Street 1"]}"#,
+            r#""delivery" must be an object"#,
+        ),
+        (
+            "a list with a value for every field where an object in a list belongs",
+            r#"{"items":[{"bookId":"1"},["2"]]}"#,
+            r#""items.1" must be an object"#,
+        ),
+        (
             "a nested value of the wrong kind",
             r#"{"delivery":{"address":1}}"#,
             r#""delivery.address" must be a string"#,
@@ -291,6 +299,130 @@ fn refuses_a_list_whose_length_differs_from_that_of_a_tuple_and_says_how_long_it
     let decoded: PreviewRequest =
         decode_strictly(br#"{"position":[1,2]}"#).expect("a list of the same length fits");
     assert_eq!(decoded.position, Some((1, 2)));
+}
+
+#[test]
+fn refuses_a_list_as_the_body_rather_than_taking_its_values_for_the_fields_in_their_order() {
+    #[derive(Debug, Deserialize)]
+    struct AcquireBook {
+        title: String,
+        author: String,
+    }
+
+    let decoded: AcquireBook = decode_strictly(br#"{"title":"2001","author":"Arthur C. Clarke"}"#)
+        .expect("an object fits");
+    assert_eq!(decoded.title, "2001");
+    assert_eq!(decoded.author, "Arthur C. Clarke");
+
+    assert_eq!(
+        text_of::<AcquireBook>(r#"["2001","Arthur C. Clarke"]"#),
+        "the body must be an object"
+    );
+    assert_eq!(
+        text_of::<Option<AcquireBook>>(r#"["2001","Arthur C. Clarke"]"#),
+        "the body must be an object"
+    );
+}
+
+#[test]
+fn refuses_a_list_where_an_object_belongs_in_a_map_a_newtype_and_a_variant() {
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    #[expect(dead_code, reason = "the fields are only decoded")]
+    struct Dispatch {
+        by_warehouse: Option<HashMap<String, Delivery>>,
+        parcel: Option<Parcel>,
+        carrier: Option<Carrier>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[expect(dead_code, reason = "the field is only decoded")]
+    struct Parcel(Delivery);
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    #[expect(dead_code, reason = "the fields are only decoded")]
+    enum Carrier {
+        Courier { name: String, phone: String },
+        Pickup(Delivery),
+    }
+
+    for (label, body, text) in [
+        (
+            "a value of a map",
+            r#"{"byWarehouse":{"north":["Main Street 1"]}}"#,
+            r#""byWarehouse.north" must be an object"#,
+        ),
+        (
+            "a newtype that holds an object",
+            r#"{"parcel":["Main Street 1"]}"#,
+            r#""parcel" must be an object"#,
+        ),
+        (
+            "a variant with named fields",
+            r#"{"carrier":{"courier":["Jane","555-0100"]}}"#,
+            r#""carrier.courier" must be an object"#,
+        ),
+        (
+            "a variant that holds an object",
+            r#"{"carrier":{"pickup":["Main Street 1"]}}"#,
+            r#""carrier.pickup" must be an object"#,
+        ),
+    ] {
+        assert_eq!(text_of::<Dispatch>(body), text, "{label}");
+    }
+}
+
+#[test]
+fn still_takes_a_list_where_a_list_belongs() {
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Corner(i32, i32);
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Isbns(Vec<String>);
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    enum Leg {
+        Transfer(String, String),
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    struct Route {
+        position: (i32, i32),
+        corner: Corner,
+        stops: Vec<Delivery>,
+        sizes: [u32; 2],
+        isbns: Isbns,
+        leg: Leg,
+    }
+
+    let decoded: Route = decode_strictly(
+        br#"{
+            "position": [1, 2],
+            "corner": [3, 4],
+            "stops": [{"address": "Main Street 1"}],
+            "sizes": [5, 6],
+            "isbns": ["978-0-345-41346-6"],
+            "leg": {"transfer": ["Main Street 1", "Station Road 2"]}
+        }"#,
+    )
+    .expect("a list fits where a list belongs");
+
+    assert_eq!(
+        decoded,
+        Route {
+            position: (1, 2),
+            corner: Corner(3, 4),
+            stops: vec![Delivery {
+                address: "Main Street 1".to_owned(),
+            }],
+            sizes: [5, 6],
+            isbns: Isbns(vec!["978-0-345-41346-6".to_owned()]),
+            leg: Leg::Transfer("Main Street 1".to_owned(), "Station Road 2".to_owned()),
+        }
+    );
 }
 
 #[test]

@@ -7,8 +7,11 @@ use std::{collections::HashSet, fmt};
 
 use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 
+mod by_name;
 #[cfg(test)]
 mod tests;
+
+use by_name::ByName;
 
 /// A time as the text for a value that is no time shows it.
 const EXAMPLE_TIME: &str = "2026-10-05T12:00:00Z";
@@ -27,8 +30,9 @@ const TIME_FAILURES: [&str; 7] = [
 
 /// Decodes a body strictly: it refuses an empty body, JSON that is not valid,
 /// anything but whitespace after the value, a name that occurs twice in an
-/// object, and a field the type does not know. What is wrong is told in words
-/// of its own, such as `"items.1.bookId" must be a string`.
+/// object, a field the type does not know, and a list where an object
+/// belongs. What is wrong is told in words of its own, such as
+/// `"items.1.bookId" must be a string`.
 pub(crate) fn decode_strictly<T: DeserializeOwned>(body: &[u8]) -> Result<T, String> {
     if body.iter().all(|byte| is_whitespace(*byte)) {
         return Err("empty body".to_owned());
@@ -42,8 +46,12 @@ pub(crate) fn decode_strictly<T: DeserializeOwned>(body: &[u8]) -> Result<T, Str
             unknown = Some(last_name_of(&path));
         }
     };
+    // ByName refuses a list where a struct belongs. It wraps the reader of the
+    // JSON itself, beneath the wrappers that note the path and the unknown
+    // fields, so that a list it refuses is named by its path like any other
+    // failure.
     let decoded: Result<T, _> = serde_path_to_error::deserialize(serde_ignored::Deserializer::new(
-        &mut deserializer,
+        ByName(&mut deserializer),
         &mut record,
     ));
 
