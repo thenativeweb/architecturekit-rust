@@ -374,6 +374,40 @@ fn refuses_a_list_where_an_object_belongs_in_a_map_a_newtype_and_a_variant() {
 }
 
 #[test]
+fn says_that_an_enum_with_a_tag_has_to_be_an_object() {
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "kind", content = "data", rename_all = "camelCase")]
+    #[expect(dead_code, reason = "the fields are only decoded")]
+    enum Shipment {
+        Book { title: String },
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "kind", rename_all = "camelCase")]
+    #[expect(dead_code, reason = "the fields are only decoded")]
+    enum Lending {
+        Book { title: String },
+    }
+
+    for (label, text) in [
+        (
+            "a list for an enum with its content in a field of its own",
+            text_of::<Shipment>(r#"["book",{"title":"2001"}]"#),
+        ),
+        (
+            "a number for an enum with its content in a field of its own",
+            text_of::<Shipment>("42"),
+        ),
+        (
+            "a number for an enum with its content beside the tag",
+            text_of::<Lending>("42"),
+        ),
+    ] {
+        assert_eq!(text, "the body must be an object", "{label}");
+    }
+}
+
+#[test]
 fn still_takes_a_list_where_a_list_belongs() {
     #[derive(Debug, Deserialize, PartialEq)]
     struct Corner(i32, i32);

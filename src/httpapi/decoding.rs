@@ -367,7 +367,13 @@ fn kind_of(expected: &str) -> Option<&'static str> {
     {
         return Some("an array");
     }
-    if expected == "a map" || expected.starts_with("struct ") {
+    // An enum with a tag is an object in JSON, whether its content stands
+    // beside the tag or in a field of its own.
+    if expected == "a map"
+        || expected.starts_with("struct ")
+        || expected.starts_with("adjacently tagged enum ")
+        || expected.starts_with("internally tagged enum ")
+    {
         return Some("an object");
     }
 
