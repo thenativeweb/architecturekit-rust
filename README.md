@@ -272,7 +272,7 @@ async fn borrow(
 }
 ```
 
-`Strict` reads the body as JSON, and refuses a body that does not fit, also because of a field that the type does not have, with 400 and what is wrong, such as `{"message":"malformed request: unknown field \"raeder\""}`. `SubjectScheme::try_build` refuses an ID that can not be part of a subject, such as `a.b`, which `?` answers with 400 as well, where `build` would panic. A command that has succeeded is answered with the revision it wrote, such as `{"revision":"42"}`. Every error of architecturekit turns into an `HttpError` with `?`, which answers it by its category:
+`Strict` reads the body as JSON, and refuses a body that does not fit, also because of a field that the type does not have, or a list where an object belongs, with 400 and what is wrong, such as `{"message":"malformed request: unknown field \"raeder\""}`. serde decodes an enum with `#[serde(untagged)]` or `#[serde(tag = "…")]`, and a field with `#[serde(flatten)]`, from a copy of its own that no strict reading reaches, so within them neither of these two is refused. `SubjectScheme::try_build` refuses an ID that can not be part of a subject, such as `a.b`, which `?` answers with 400 as well, where `build` would panic. A command that has succeeded is answered with the revision it wrote, such as `{"revision":"42"}`. Every error of architecturekit turns into an `HttpError` with `?`, which answers it by its category:
 
 | Failure | Status | Message |
 |---|---|---|
