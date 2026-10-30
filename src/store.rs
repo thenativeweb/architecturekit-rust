@@ -8,13 +8,9 @@ use eventsourcingdb::{
         Bound, BoundType, ReadEventMissingStrategy, ReadEventsOptions, ReadFromLatestEventOptions,
     },
 };
-use futures_util::{
-    Stream, StreamExt,
-    future::{self, Either},
-    stream,
-};
+use futures_util::{Stream, StreamExt, future};
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use crate::Reconnect;
 use crate::{
@@ -398,69 +394,35 @@ impl Store {
         check_read_options(options)?;
 
         let doing = format!("reading {:?}", subjects.subject().as_str());
-        let (opened, is_opened) = oneshot::channel();
-        let (sender, receiver) = mpsc::channel(1);
-
-        // The client takes the IDs of the bounds as text, which the events it
-        // hands out may borrow, so the text and the events live in one future,
-        // which hands on every event as it reads it.
-        let reading = Box::pin(async move {
-            let bounds = DatabaseBounds::of(options);
-            let requested = self
-                .client
-                .read_events(
-                    subjects.subject().as_str(),
-                    Some(database_options(subjects, options, &bounds)),
-                )
-                .await;
-            let events = match requested {
-                Ok(events) => events,
-                Err(error) => {
-                    let _ = opened.send(Err(ReadError::from(read_failure(error, &doing))));
-                    return;
-                }
-            };
-            if opened.send(Ok(())).is_err() {
-                return;
-            }
-
-            let mut events = pin!(events);
-            while let Some(event) = events.next().await {
-                let event = event
-                    .map_err(|error| ReadError::from(read_failure(error, &doing)))
-                    .and_then(|event| {
-                        self.verify(&event)?;
-                        Ok(event)
-                    });
-
-                // The stream ends with the first failure, and once the
-                // caller has dropped it.
-                let has_failed = event.is_err();
-                if sender.send(event).await.is_err() || has_failed {
-                    return;
-                }
-            }
-        });
+        let bounds = DatabaseBounds::of(options);
 
         // A read that the database refuses at once fails here, rather than as
-        // the first element of the stream. The future may have read everything
-        // by then, and is driven on otherwise.
-        let (opened, reading) = match future::select(reading, is_opened).await {
-            Either::Left(((), is_opened)) => (is_opened.await, None),
-            Either::Right((opened, reading)) => (opened, Some(reading)),
-        };
-        if let Ok(Err(failure)) = opened {
-            return Err(failure);
-        }
+        // the first element of the stream.
+        let events = self
+            .client
+            .read_events(
+                subjects.subject().as_str(),
+                Some(database_options(subjects, options, &bounds)),
+            )
+            .await
+            .map_err(|error| ReadError::from(read_failure(error, &doing)))?;
 
-        let events = stream::unfold(receiver, |mut receiver| async move {
-            receiver.recv().await.map(|event| (event, receiver))
-        });
-        let driven = stream::iter(reading)
-            .then(|reading| reading)
-            .filter_map(|()| future::ready(None::<Result<eventsourcingdb::Event, ReadError>>));
+        Ok(events
+            .map(move |event| {
+                let event = event.map_err(|error| ReadError::from(read_failure(error, &doing)))?;
+                self.verify(&event)?;
 
-        Ok(stream::select(events, driven))
+                Ok(event)
+            })
+            // The stream ends with the first failure.
+            .scan(false, |has_failed, event| {
+                if *has_failed {
+                    return future::ready(None);
+                }
+                *has_failed = event.is_err();
+
+                future::ready(Some(event))
+            }))
     }
 
     /// Checks an event the store has read: its hash, unless the store was
