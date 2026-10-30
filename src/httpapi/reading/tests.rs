@@ -812,7 +812,7 @@ async fn a_query_that_can_not_be_encoded_goes_without_a_tag() {
 }
 
 #[test]
-fn names_the_headers_as_arch_kit_for_go_does() {
+fn names_the_headers() {
     assert_eq!(WAIT_FOR_REVISION.as_str(), "wait-for-revision");
     assert_eq!(REVISION.as_str(), "revision");
 }

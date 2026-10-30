@@ -586,7 +586,7 @@ fn rejects_a_name_that_occurs_twice() {
 }
 
 #[test]
-fn matches_names_by_their_case_unlike_go() {
+fn tells_names_apart_by_their_case() {
     assert_eq!(
         text_of::<PreviewRequest>(r#"{"QUANTITY":3}"#),
         r#"unknown field "QUANTITY""#
