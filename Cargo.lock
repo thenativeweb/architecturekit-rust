@@ -727,9 +727,9 @@ dependencies = [
 
 [[package]]
 name = "eventsourcingdb"
-version = "4.0.5"
+version = "4.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5d50d5a35693636d3f912a478a0088b5187e1770c7527325e91f212ede12be5"
+checksum = "c31192d85137b41c2a610e790bcd512b82da300f5531e4f59d9ab0808ea55dc5"
 dependencies = [
  "bytes",
  "chrono",
@@ -1528,9 +1528,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.34"
+version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "lru-slab"
