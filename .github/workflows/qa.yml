@@ -24,7 +24,7 @@ jobs:
     - name: Clone repository
       uses: actions/checkout@v7.0.1
     - name: Use Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+      uses: actions-rust-lang/setup-rust-toolchain@v2.0.1
       with:
         toolchain: stable
         components: clippy, rustfmt
@@ -47,7 +47,7 @@ jobs:
         test -n "$msrv"
         echo "MSRV=$msrv" >> "$GITHUB_ENV"
     - name: Use Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+      uses: actions-rust-lang/setup-rust-toolchain@v2.0.1
       with:
         toolchain: ${{ env.MSRV }}
         cache: true
@@ -64,13 +64,13 @@ jobs:
     - name: Clone repository
       uses: actions/checkout@v7.0.1
     - name: Use Rust
-      uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+      uses: actions-rust-lang/setup-rust-toolchain@v2.0.1
       with:
         toolchain: stable
         cache: true
         build-warnings: ""
     - name: Install cargo-hack
-      uses: taiki-e/install-action@v2.87.32
+      uses: taiki-e/install-action@v2.90.0
       with:
         tool: cargo-hack
     # Rust compiles a crate with the features its user turns on, so every
