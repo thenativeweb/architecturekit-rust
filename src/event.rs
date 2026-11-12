@@ -27,8 +27,38 @@ use crate::Schema;
 /// ```
 ///
 /// The derive also derives [`Schema`] for the event, from the fields that serde
-/// writes. An event whose schema can not be derived, or that describes its
-/// schema differently, implements both traits by hand instead.
+/// writes. To say more than the fields can, such as that at least one of them
+/// is there, name a function with `schema_with`, which gets the derived schema
+/// and returns the one that is registered:
+///
+/// ```
+/// use architecturekit::{Event, Schema};
+/// use serde::{Deserialize, Serialize};
+/// use serde_json::{Value, json};
+///
+/// #[derive(Serialize, Deserialize, Event)]
+/// #[event(
+///     type = "io.eventsourcingdb.library.book-corrected",
+///     schema_with = "at_least_one_field"
+/// )]
+/// struct BookCorrected {
+///     #[serde(skip_serializing_if = "Option::is_none")]
+///     title: Option<String>,
+///     #[serde(skip_serializing_if = "Option::is_none")]
+///     author: Option<String>,
+/// }
+///
+/// fn at_least_one_field(mut derived: Value) -> Value {
+///     derived["minProperties"] = json!(1);
+///     derived
+/// }
+///
+/// assert_eq!(BookCorrected::schema()["minProperties"], 1);
+/// ```
+///
+/// A function that leaves the derived schema aside replaces it, for example
+/// with one read from a file with `include_str!`. An event whose schema can
+/// not be derived at all implements both traits by hand instead.
 ///
 /// An event type names exactly one shape of data, which is why an event can
 /// not be generic:

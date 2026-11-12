@@ -535,3 +535,82 @@ fn agrees_with_serde_json_on_names_and_options() {
         }
     }
 }
+
+/// Requires at least one field, which the schema derived from fields that are
+/// all optional can not say by itself.
+fn with_at_least_one_property(mut derived: Value) -> Value {
+    derived["minProperties"] = json!(1);
+    derived
+}
+
+#[test]
+fn starts_the_schema_of_an_event_from_the_derived_one_with_schema_with() {
+    #[derive(Serialize, Deserialize, Event)]
+    #[event(
+        type = "io.thenativeweb.test.book-corrected",
+        schema_with = "with_at_least_one_property"
+    )]
+    struct BookCorrected {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        author: Option<String>,
+    }
+
+    let expected = r#"{"additionalProperties":false,"minProperties":1,"properties":{"author":{"type":"string"},"title":{"type":"string"}},"type":"object"}"#;
+    assert_schema::<BookCorrected>(expected);
+    assert_eq!(
+        crate::EventSchema::of::<BookCorrected>().schema(),
+        &serde_json::from_str::<Value>(expected).expect("the expected schema is JSON"),
+        "the store registers the extended schema"
+    );
+}
+
+#[test]
+fn replaces_the_schema_of_an_event_with_schema_with() {
+    fn from_a_file(_derived: Value) -> Value {
+        json!({
+            "type": "object",
+            "properties": { "isbn": { "type": "string", "pattern": "^[0-9-]+$" } },
+            "required": ["isbn"],
+            "additionalProperties": false,
+        })
+    }
+
+    #[derive(Serialize, Deserialize, Event)]
+    #[event(
+        type = "io.thenativeweb.test.book-catalogued",
+        schema_with = "from_a_file"
+    )]
+    struct BookCatalogued {
+        isbn: String,
+    }
+
+    assert_schema::<BookCatalogued>(
+        r#"{"additionalProperties":false,"properties":{"isbn":{"pattern":"^[0-9-]+$","type":"string"}},"required":["isbn"],"type":"object"}"#,
+    );
+}
+
+#[test]
+fn starts_the_schema_of_a_nested_type_from_the_derived_one_with_with() {
+    fn with_a_short_city(mut derived: Value) -> Value {
+        derived["properties"]["city"]["maxLength"] = json!(100);
+        derived
+    }
+
+    #[derive(Serialize, Deserialize, Schema)]
+    #[schema(with = "with_a_short_city")]
+    struct Address {
+        city: String,
+    }
+
+    #[derive(Serialize, Deserialize, Event)]
+    #[event(type = "io.thenativeweb.test.reader-moved")]
+    struct ReaderMoved {
+        address: Address,
+    }
+
+    assert_schema::<ReaderMoved>(
+        r#"{"additionalProperties":false,"properties":{"address":{"additionalProperties":false,"properties":{"city":{"maxLength":100,"type":"string"}},"required":["city"],"type":"object"}},"required":["address"],"type":"object"}"#,
+    );
+}
