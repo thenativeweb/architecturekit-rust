@@ -48,7 +48,7 @@
 //!
 //! The derive also derives the JSON schema of the event from the fields that serde writes. EventSourcingDB rejects events whose data does not match the registered schema, and a registered schema can not change, so the rules of the derive are fixed: the same fields always give the same schema.
 //!
-//! For a type within the data of an event, such as a nested struct, derive `Schema`. A type whose schema can not be derived, such as an enum, implements `Schema` by hand, and the derive refuses to compile otherwise. For the rules, see the documentation of `Schema` on [docs.rs](https://docs.rs/architecturekit/latest/architecturekit/trait.Schema.html).
+//! For a type within the data of an event, such as a nested struct, derive `Schema`. A type whose schema can not be derived, such as an enum, implements `Schema` by hand, and the derive refuses to compile otherwise. To say more than the fields can, such as that at least one of them is there, name a function with `schema_with` in `#[event(...)]`, or with `with` in `#[schema(...)]` for a nested type: it gets the derived schema, and returns the one that is used. For the rules, see the documentation of `Schema` on [docs.rs](https://docs.rs/architecturekit/latest/architecturekit/trait.Schema.html).
 //!
 //! ## Replaying States
 //!

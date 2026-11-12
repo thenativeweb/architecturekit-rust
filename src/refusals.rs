@@ -22,6 +22,49 @@
 /// ```
 pub struct EventType;
 
+/// The function that the schema of an event goes through is named as a
+/// string, as serde names the functions it calls:
+///
+/// ```compile_fail
+/// fn at_least_one(derived: serde_json::Value) -> serde_json::Value { derived }
+///
+/// #[derive(serde::Serialize, serde::Deserialize, architecturekit::Event)]
+/// #[event(type = "io.eventsourcingdb.library.book-acquired", schema_with = at_least_one)]
+/// struct BookAcquired {
+///     title: String,
+/// }
+/// ```
+///
+/// And it is named once:
+///
+/// ```compile_fail
+/// fn at_least_one(derived: serde_json::Value) -> serde_json::Value { derived }
+/// fn at_most_two(derived: serde_json::Value) -> serde_json::Value { derived }
+///
+/// #[derive(serde::Serialize, serde::Deserialize, architecturekit::Event)]
+/// #[event(
+///     type = "io.eventsourcingdb.library.book-acquired",
+///     schema_with = "at_least_one",
+///     schema_with = "at_most_two"
+/// )]
+/// struct BookAcquired {
+///     title: String,
+/// }
+/// ```
+///
+/// A type that derives its schema takes nothing but `with`:
+///
+/// ```compile_fail
+/// fn short(derived: serde_json::Value) -> serde_json::Value { derived }
+///
+/// #[derive(serde::Serialize, architecturekit::Schema)]
+/// #[schema(schema_with = "short")]
+/// struct Address {
+///     city: String,
+/// }
+/// ```
+pub struct SchemaWith;
+
 /// serde writes an enum in several shapes:
 ///
 /// ```compile_fail

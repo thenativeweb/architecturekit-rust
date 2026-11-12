@@ -98,6 +98,30 @@ mod tests;
 /// 64-bit integer exact, write it as a string, in a type that describes itself
 /// as a string.
 ///
+/// A type that derives its schema can say more than its fields do with
+/// `#[schema(with = "...")]`, which names a function that gets the derived
+/// schema and returns the one to use, as `schema_with` does for an
+/// [`Event`](crate::Event):
+///
+/// ```
+/// use architecturekit::Schema;
+/// use serde::{Deserialize, Serialize};
+/// use serde_json::{Value, json};
+///
+/// #[derive(Serialize, Deserialize, Schema)]
+/// #[schema(with = "with_a_short_city")]
+/// struct Address {
+///     city: String,
+/// }
+///
+/// fn with_a_short_city(mut derived: Value) -> Value {
+///     derived["properties"]["city"]["maxLength"] = json!(100);
+///     derived
+/// }
+///
+/// assert_eq!(Address::schema()["properties"]["city"]["maxLength"], 100);
+/// ```
+///
 /// Implementing `Schema` by hand is how a type describes itself further, for
 /// example with a pattern:
 ///

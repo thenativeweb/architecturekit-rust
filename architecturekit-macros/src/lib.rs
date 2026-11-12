@@ -25,8 +25,8 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
-    Data, DeriveInput, Error, Fields, GenericParam, LitStr, Result, ext::IdentExt,
-    parse_macro_input, parse_quote, spanned::Spanned,
+    Data, DeriveInput, Error, Fields, GenericParam, LitStr, Path, Result, ext::IdentExt,
+    meta::ParseNestedMeta, parse_macro_input, parse_quote, spanned::Spanned,
 };
 
 use crate::attributes::{ContainerAttributes, FieldAttributes};
@@ -53,10 +53,11 @@ pub fn derive_events(input: TokenStream) -> TokenStream {
 
 /// Derives `architecturekit::Schema` for a type in the data of an event. See
 /// `architecturekit::Schema`.
-#[proc_macro_derive(Schema)]
+#[proc_macro_derive(Schema, attributes(schema))]
 pub fn derive_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    expand_schema(&input)
+    schema_with_of(&input)
+        .and_then(|schema_with| expand_schema(&input, schema_with.as_ref()))
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }
@@ -71,8 +72,8 @@ fn expand_event(input: &DeriveInput) -> Result<TokenStream2> {
         ));
     }
 
-    let event_type = event_type_of(input)?;
-    let schema = expand_schema(input)?;
+    let (event_type, schema_with) = event_attributes_of(input)?;
+    let schema = expand_schema(input, schema_with.as_ref())?;
     let name = &input.ident;
 
     Ok(quote! {
@@ -84,34 +85,71 @@ fn expand_event(input: &DeriveInput) -> Result<TokenStream2> {
     })
 }
 
-fn event_type_of(input: &DeriveInput) -> Result<LitStr> {
+/// Reads the event type of an event, and the function its schema goes through,
+/// if it names one, from `#[event(type = "...", schema_with = "...")]`.
+fn event_attributes_of(input: &DeriveInput) -> Result<(LitStr, Option<Path>)> {
     let mut event_type: Option<LitStr> = None;
+    let mut schema_with: Option<Path> = None;
 
     for attribute in input.attrs.iter().filter(|a| a.path().is_ident("event")) {
         attribute.parse_nested_meta(|meta| {
-            if !meta.path.is_ident("type") {
-                return Err(meta.error("expected `type = \"...\"`"));
+            if meta.path.is_ident("type") {
+                let value: LitStr = meta.value()?.parse()?;
+                if value.value().is_empty() {
+                    return Err(Error::new(value.span(), "the event type must not be empty"));
+                }
+                if event_type.replace(value).is_some() {
+                    return Err(meta.error("the event type is given more than once"));
+                }
+                return Ok(());
             }
-            let value: LitStr = meta.value()?.parse()?;
-            if value.value().is_empty() {
-                return Err(Error::new(value.span(), "the event type must not be empty"));
+            if meta.path.is_ident("schema_with") {
+                return read_schema_with(&meta, &mut schema_with);
             }
-            if event_type.replace(value).is_some() {
-                return Err(meta.error("the event type is given more than once"));
-            }
-            Ok(())
+            Err(meta.error("expected `type = \"...\"` or `schema_with = \"...\"`"))
         })?;
     }
 
-    event_type.ok_or_else(|| {
+    let event_type = event_type.ok_or_else(|| {
         Error::new(
             input.ident.span(),
             "an event needs its event type, as in #[event(type = \"io.eventsourcingdb.library.book-acquired\")]",
         )
-    })
+    })?;
+
+    Ok((event_type, schema_with))
 }
 
-fn expand_schema(input: &DeriveInput) -> Result<TokenStream2> {
+/// Reads the function the schema of a type goes through, if it names one, from
+/// `#[schema(with = "...")]`.
+fn schema_with_of(input: &DeriveInput) -> Result<Option<Path>> {
+    let mut schema_with: Option<Path> = None;
+
+    for attribute in input.attrs.iter().filter(|a| a.path().is_ident("schema")) {
+        attribute.parse_nested_meta(|meta| {
+            if meta.path.is_ident("with") {
+                return read_schema_with(&meta, &mut schema_with);
+            }
+            Err(meta.error("expected `with = \"...\"`"))
+        })?;
+    }
+
+    Ok(schema_with)
+}
+
+/// Reads the path of the function that the schema goes through, which is
+/// written as a string, as serde writes the functions it calls.
+fn read_schema_with(meta: &ParseNestedMeta<'_>, schema_with: &mut Option<Path>) -> Result<()> {
+    let value: LitStr = meta.value()?.parse()?;
+    let path: Path = value.parse()?;
+    if schema_with.replace(path).is_some() {
+        return Err(meta.error("the function of the schema is given more than once"));
+    }
+
+    Ok(())
+}
+
+fn expand_schema(input: &DeriveInput, schema_with: Option<&Path>) -> Result<TokenStream2> {
     let container = ContainerAttributes::of(&input.attrs)?;
     let body = match &input.data {
         Data::Struct(data) => schema_of_struct(&container, &data.fields, input)?,
@@ -139,10 +177,17 @@ fn expand_schema(input: &DeriveInput) -> Result<TokenStream2> {
     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
     let name = &input.ident;
 
+    let derived =
+        quote! { ::architecturekit::__private::derive(::std::any::type_name::<Self>(), || #body) };
+    let schema = match schema_with {
+        Some(schema_with) => quote! { #schema_with(#derived) },
+        None => derived,
+    };
+
     Ok(quote! {
         impl #impl_generics ::architecturekit::Schema for #name #type_generics #where_clause {
             fn schema() -> ::architecturekit::__private::Value {
-                ::architecturekit::__private::derive(::std::any::type_name::<Self>(), || #body)
+                #schema
             }
         }
     })
