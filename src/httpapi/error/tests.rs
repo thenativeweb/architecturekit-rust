@@ -18,8 +18,8 @@ use log::Level;
 use super::HttpError;
 use crate::{
     Categorized, Category, DomainError, ExecuteError, Failure, LoadError, LowerBound, Permanent,
-    ReadOptions, Revision, Subject, SubjectScheme, Transient, UpperBound, check_read_options,
-    httpapi::logs::captured, query::SingleError,
+    ReadOptions, Revision, Subject, SubjectScheme, Transient, UpperBound, ViewError,
+    check_read_options, httpapi::logs::captured, query::SingleError,
 };
 
 /// An error of a category the test names, as an application has one.
@@ -57,6 +57,27 @@ fn outcome_unknown(cause: Option<Transient>) -> ExecuteError<DomainError> {
         "writing to the subject /books/42",
         cause.map(Into::into),
     ))
+}
+
+/// Passes the failure on with `?`, as a handler does.
+fn passed_on<F>(failure: F) -> HttpError
+where
+    HttpError: From<F>,
+{
+    fn handle<F>(failed: Result<(), F>) -> Result<(), HttpError>
+    where
+        HttpError: From<F>,
+    {
+        failed?;
+        Ok(())
+    }
+
+    handle(Err(failure)).expect_err("the failure is passed on")
+}
+
+/// A change of a view in memory that was refused, as it fails a projection.
+fn refused_change() -> ViewError {
+    ViewError::Permanent(permanent())
 }
 
 fn empty_range() -> HttpError {
@@ -277,6 +298,30 @@ fn maps_a_failure_of_the_database_by_its_category() {
     );
 }
 
+#[test]
+fn maps_a_failure_on_its_own_by_its_category() {
+    for (name, error, status) in [
+        ("a conflict", passed_on(conflict()), StatusCode::CONFLICT),
+        (
+            "a transient failure",
+            passed_on(transient()),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            "a permanent failure",
+            passed_on(permanent()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "a refused change of a view",
+            passed_on(refused_change()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    ] {
+        assert_eq!(error.status(), status, "{name}");
+    }
+}
+
 /// Answers the failure, and returns the answer with what was logged meanwhile.
 fn answered(error: HttpError) -> (Response<Bytes>, Vec<(Level, String)>) {
     captured(|| Response::<Bytes>::from(error))
@@ -372,6 +417,12 @@ fn answers_a_refusal_with_a_fixed_text_and_logs_the_details_as_information() {
             "/books/42",
         ),
         (
+            "a conflict on its own",
+            passed_on(conflict()),
+            "conflict: the data has changed since it was read",
+            "/books/42",
+        ),
+        (
             "a query that found no item",
             SingleError::<Infallible>::NoItems.into(),
             "not found",
@@ -401,6 +452,21 @@ fn answers_an_internal_failure_with_a_fixed_text_and_logs_it_as_an_error() {
         (
             "a permanent failure",
             ExecuteError::<DomainError>::Permanent(permanent()).into(),
+            "internal server error",
+        ),
+        (
+            "a transient failure on its own",
+            passed_on(transient()),
+            "internal server error",
+        ),
+        (
+            "a permanent failure on its own",
+            passed_on(permanent()),
+            "internal server error",
+        ),
+        (
+            "a refused change of a view",
+            passed_on(refused_change()),
             "internal server error",
         ),
         (

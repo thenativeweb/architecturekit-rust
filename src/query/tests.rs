@@ -10,7 +10,7 @@
 use std::{
     cmp::Ordering,
     error::Error,
-    fmt,
+    fmt, io, iter,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering as AtomicOrdering},
@@ -20,7 +20,7 @@ use std::{
 use futures_util::{Stream, StreamExt, TryStreamExt, future, stream};
 
 use super::{QueryExt, SingleError};
-use crate::{Categorized, Category};
+use crate::{Categorized, Category, Failure, Transient};
 
 /// An error of a view, such as a cursor that loses its connection.
 #[derive(Debug, PartialEq, Eq)]
@@ -336,13 +336,25 @@ mod single {
     }
 
     #[tokio::test]
-    async fn names_the_error_of_the_view_as_its_source() {
-        let failure = SingleError::View(Broken);
-        let source = failure
-            .source()
-            .expect("the error of the view is the source");
+    async fn names_the_error_of_the_view_only_once_in_its_chain() {
+        // Its text is the one of the error of the view, so it passes on the
+        // source of that error, and an error reporter that follows the sources
+        // names the error of the view once.
+        let failure = SingleError::View(Transient::Other(Failure::new(
+            "reading the view",
+            Some(Box::new(io::Error::other("connection refused"))),
+        )));
 
-        assert_eq!(source.to_string(), "the view broke");
+        let reported: &(dyn Error + 'static) = &failure;
+        let chain: Vec<String> = iter::successors(Some(reported), |&error| error.source())
+            .map(ToString::to_string)
+            .collect();
+
+        assert_eq!(
+            chain,
+            ["transient failure: reading the view", "connection refused"]
+        );
+        assert!(SingleError::View(Broken).source().is_none());
         assert!(SingleError::<Broken>::NoItems.source().is_none());
     }
 }
