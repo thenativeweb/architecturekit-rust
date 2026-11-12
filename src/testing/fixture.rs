@@ -3,8 +3,8 @@ use std::{error::Error, fmt};
 use serde_json::Value;
 
 use crate::{
-    Command, Decider, Events, ExecuteError, Precondition, State, Subject, UpcastEvent,
-    check_preconditions, replay, replay_stored, store::unencodable,
+    Categorized, Category, Command, Decider, Events, ExecuteError, Precondition, State, Subject,
+    UpcastEvent, check_preconditions, replay, replay_stored, store::unencodable,
 };
 
 #[cfg(test)]
@@ -147,9 +147,8 @@ impl<S: State, D: fmt::Debug> fmt::Debug for Decision<S, D> {
 
 impl<S: State, D: fmt::Debug> Decision<S, D> {
     /// Returns the events the decider decided on, or the error the command
-    /// failed with, for what the assertions do not check, such as the category
-    /// of an error, or a refusal of the kit, as in
-    /// `assert!(matches!(decision.result(), Err(ExecuteError::Permanent(_))))`.
+    /// failed with, for what the assertions do not check, such as the events
+    /// in a shape of their own.
     ///
     /// # Errors
     ///
@@ -226,8 +225,9 @@ impl<S: State, D: fmt::Debug> Decision<S, D> {
     }
 
     /// Expects the decider to have refused the command with the given error.
-    /// For anything else about a failure, such as its category, or a refusal
-    /// of the kit, use [`result`](Decision::result).
+    /// To expect any error of a category instead, use
+    /// [`then_failed_in`](Decision::then_failed_in), and for a refusal of the
+    /// kit, [`then_failed_matching`](Decision::then_failed_matching).
     ///
     /// # Panics
     ///
@@ -250,6 +250,62 @@ impl<S: State, D: fmt::Debug> Decision<S, D> {
             ),
             Ok(decided) => panic!(
                 "expected an error matching {expected:?}, got {}",
+                describe(&decided.events)
+            ),
+        }
+
+        self
+    }
+
+    /// Expects the command to have failed with any error of the given
+    /// category, from the decider, such as any rejection of
+    /// [`Category::Domain`], or from the kit, such as one of
+    /// [`Category::Permanent`]. It does not compare messages, so rewording a
+    /// rejection breaks no test.
+    ///
+    /// # Panics
+    ///
+    /// Fails the test if the command failed with an error of another category,
+    /// or of none, or if it did not fail.
+    #[track_caller]
+    pub fn then_failed_in(&self, category: Category) -> &Self
+    where
+        D: Categorized,
+    {
+        match &self.result {
+            Err(failure) if failure.category() == Some(category) => {}
+            Err(failure) => panic!(
+                "expected an error of the category {category:?}, got {}",
+                describe_failure(failure)
+            ),
+            Ok(decided) => panic!(
+                "expected an error of the category {category:?}, got {}",
+                describe(&decided.events)
+            ),
+        }
+
+        self
+    }
+
+    /// Expects the command to have failed with an error that the given
+    /// function accepts, for a failure that neither its value nor its category
+    /// tells apart, such as a refusal of the kit, as in
+    /// `decision.then_failed_matching(|failure| matches!(failure, ExecuteError::NotARevision(_)))`.
+    ///
+    /// # Panics
+    ///
+    /// Fails the test if the function refuses the error, or if the command did
+    /// not fail.
+    #[track_caller]
+    pub fn then_failed_matching(&self, matches: impl Fn(&ExecuteError<D>) -> bool) -> &Self {
+        match &self.result {
+            Err(failure) if matches(failure) => {}
+            Err(failure) => panic!(
+                "expected an error that matches, got {}",
+                describe_failure(failure)
+            ),
+            Ok(decided) => panic!(
+                "expected an error that matches, got {}",
                 describe(&decided.events)
             ),
         }

@@ -357,6 +357,104 @@ async fn fails_then_failed_when_nothing_failed() {
 }
 
 #[tokio::test]
+async fn matches_the_category_of_the_error_of_the_decider() {
+    given(&decider(), [opened("golo")])
+        .when(open("jane"))
+        .await
+        .then_failed_in(Category::Domain);
+
+    given(&decider(), [])
+        .when(open(""))
+        .await
+        .then_failed_in(Category::Permanent);
+}
+
+#[tokio::test]
+async fn matches_the_category_of_a_refusal_of_the_kit() {
+    given(&decider(), [])
+        .when(open("golo").declaring(|| {
+            vec![
+                Precondition::unconditionally(),
+                Precondition::on_state_read(),
+            ]
+        }))
+        .await
+        .then_failed_in(Category::Permanent);
+}
+
+#[tokio::test]
+async fn fails_then_failed_in_for_another_category() {
+    let decision = given(&decider(), [opened("golo")]).when(open("jane")).await;
+
+    assert_eq!(
+        failure_of(|| {
+            let _ = decision.then_failed_in(Category::Permanent);
+        }),
+        r#"expected an error of the category Permanent, got AlreadyOpen { owner: "golo" }"#,
+    );
+}
+
+#[tokio::test]
+async fn fails_then_failed_in_when_nothing_failed() {
+    let decision = given(&decider(), []).when(open("golo")).await;
+
+    assert_eq!(
+        failure_of(|| {
+            let _ = decision.then_failed_in(Category::Domain);
+        }),
+        r#"expected an error of the category Domain, got 1 event(s): ["test.account.opened"]"#,
+    );
+}
+
+#[tokio::test]
+async fn matches_a_failure_that_the_predicate_accepts() {
+    given(&decider(), [])
+        .when(open("golo").declaring(|| {
+            vec![
+                Precondition::unconditionally(),
+                Precondition::on_state_read(),
+            ]
+        }))
+        .await
+        .then_failed_matching(|failure| matches!(failure, ExecuteError::Permanent(_)));
+
+    given(&decider(), [opened("golo")])
+        .when(open("jane"))
+        .await
+        .then_failed_matching(|failure| {
+            matches!(
+                failure,
+                ExecuteError::Decider(AccountError::AlreadyOpen { .. })
+            )
+        });
+}
+
+#[tokio::test]
+async fn fails_then_failed_matching_for_a_failure_the_predicate_refuses() {
+    let decision = given(&decider(), [opened("golo")]).when(open("jane")).await;
+
+    assert_eq!(
+        failure_of(|| {
+            let _ = decision
+                .then_failed_matching(|failure| matches!(failure, ExecuteError::Permanent(_)));
+        }),
+        r#"expected an error that matches, got AlreadyOpen { owner: "golo" }"#,
+    );
+}
+
+#[tokio::test]
+async fn fails_then_failed_matching_when_nothing_failed() {
+    let decision = given(&decider(), []).when(open("golo")).await;
+
+    assert_eq!(
+        failure_of(|| {
+            let _ = decision.then_failed_matching(|_| true);
+        }),
+        r#"expected an error that matches, got 1 event(s): ["test.account.opened"]"#,
+    );
+}
+
+#[tokio::test]
 async fn hands_out_the_result_for_what_then_failed_does_not_compare() {
     // The category of an error, which then_failed does not compare.
     let decision = given(&decider(), []).when(open("")).await;
