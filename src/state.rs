@@ -280,16 +280,53 @@ pub fn step<S: State>(current: &S, event: &S::Event) -> Result<S, Permanent> {
 }
 
 /// Takes a state a single stored event further, running the upcasters on the
-/// way, exactly as reading from the database would. If the upcasters turn the
-/// event into several, the state evolves by all of them. Otherwise, it behaves
-/// like [`step`].
+/// way, exactly as reading from the database would. It takes the event as the
+/// database stores it, such as one that a projection of stored events gets,
+/// so that the upcasters see its subject, ID, time and source. If the
+/// upcasters turn the event into several, the state evolves by all of them.
+/// Otherwise, it behaves like [`step`].
+///
+/// A projection that tells what each event changed keeps the state before an
+/// event, and steps it:
+///
+/// ```
+/// use std::{collections::HashMap, convert::Infallible, sync::Mutex};
+///
+/// use architecturekit::{Envelope, Events, State, eventsourcingdb, projection_fn, step_stored};
+/// # #[derive(serde::Serialize, serde::Deserialize, architecturekit::Event)]
+/// # #[event(type = "io.eventsourcingdb.library.book-borrowed")]
+/// # struct BookBorrowed {}
+/// # #[derive(Events)]
+/// # enum BookEvent { Borrowed(BookBorrowed) }
+/// # #[derive(Clone, Default)]
+/// # struct Book { is_borrowed: bool }
+/// # impl State for Book {
+/// #     type Event = BookEvent;
+/// #     fn evolve(self, _: &BookEvent) -> Self { Book { is_borrowed: true } }
+/// # }
+///
+/// let books: Mutex<HashMap<String, Book>> = Mutex::default();
+/// let history = projection_fn(move |event: Envelope<eventsourcingdb::Event>| {
+///     let mut books = books.lock().unwrap();
+///     let before = books.get(event.subject.as_str()).cloned().unwrap_or_default();
+///     let after = step_stored(&before, &event.data);
+///     if let Ok(after) = &after {
+///         if !before.is_borrowed && after.is_borrowed {
+///             // The book was borrowed by this event.
+///         }
+///         books.insert(event.subject.to_string(), after.clone());
+///     }
+///     async move { after.map(|_| ()) }
+/// });
+/// ```
 ///
 /// # Errors
 ///
 /// Fails permanently if an upcaster fails, if an event has a type the state
-/// has no rule for, or if its data does not match its type.
-pub fn step_stored<S: State>(current: &S, stored: UpcastEvent) -> Result<S, Permanent> {
-    evolve_by_stored(current.clone(), stored)
+/// has no rule for, if its data does not match its type, or if its ID or
+/// subject is not one, neither of which the database ever writes.
+pub fn step_stored<S: State>(current: &S, stored: &eventsourcingdb::Event) -> Result<S, Permanent> {
+    evolve_by_stored(current.clone(), UpcastEvent::from_stored(stored)?)
 }
 
 /// Takes a state further by a typed event, after writing it as JSON and
