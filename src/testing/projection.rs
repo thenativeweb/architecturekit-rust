@@ -1,13 +1,58 @@
+use std::fmt::Debug;
+
 use chrono::{DateTime, TimeDelta, Utc};
-use futures_util::stream;
+use futures_util::{TryStreamExt, stream};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    Events, Projection, ProjectionError, Revision, Subject, TransactionalProjection,
+    Events, Projection, ProjectionError, Revision, Subject, TransactionalProjection, View,
     projection::MADE_UP_SOURCE as SOURCE,
     store::projecting::{RebuildWriter, TransactionalWriter, Writer, drive},
 };
+
+/// Returns every item of a view, in the order the view hands them out, for a
+/// test that checks what a projection built. It needs the feature `testing`.
+///
+/// # Panics
+///
+/// Fails the test if reading the view fails.
+pub async fn items_of<T, V: View<T>>(view: &V) -> Vec<T> {
+    match view.all().try_collect().await {
+        Ok(items) => items,
+        Err(error) => panic!("reading the view: {error}"),
+    }
+}
+
+/// Expects a view to hold exactly the given items, in the given order, which
+/// it compares with `PartialEq`, as `assert_eq!` does. It needs the feature
+/// `testing`.
+///
+/// ```
+/// # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+/// use architecturekit::{InMemoryView, testing::expect_items};
+///
+/// let titles = InMemoryView::<String, String>::new(String::clone);
+///
+/// expect_items(&titles, []).await;
+/// # });
+/// ```
+///
+/// # Panics
+///
+/// Fails the test if the items differ, or if reading the view fails.
+pub async fn expect_items<T: PartialEq + Debug, V: View<T>>(
+    view: &V,
+    expected: impl IntoIterator<Item = T>,
+) {
+    let items = items_of(view).await;
+    let expected: Vec<T> = expected.into_iter().collect();
+
+    assert!(
+        items == expected,
+        "expected the items {expected:?}, got {items:?}"
+    );
+}
 
 #[cfg(test)]
 mod tests;

@@ -26,13 +26,14 @@ keywords = [
 categories = ["database"]
 
 [package.metadata.docs.rs]
-features = ["axum", "testcontainers"]
+features = ["axum", "pem", "testcontainers"]
 
 [features]
 axum = ["http", "dep:axum", "dep:http-body-util"]
 default = ["derive"]
 derive = ["dep:architecturekit-macros"]
 http = ["dep:bytes", "dep:http", "dep:serde_ignored", "dep:serde_path_to_error"]
+pem = ["ed25519-dalek/pem"]
 testcontainers = [
   "testing",
   "dep:testcontainers",

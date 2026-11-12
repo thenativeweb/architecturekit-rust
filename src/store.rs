@@ -102,6 +102,11 @@ impl StoreBuilder {
     /// The database signs events only if it runs with a signing key, and it
     /// signs them when handing them out, with the key it has at that moment.
     /// After the key is rotated, hand over the new verification key.
+    ///
+    /// The verification key is a `VerifyingKey` of the crate `ed25519_dalek`,
+    /// which the kit re-exports. To read it from a PEM file, turn on the
+    /// feature `pem`, and call `VerifyingKey::from_public_key_pem` of the trait
+    /// `ed25519_dalek::pkcs8::DecodePublicKey`.
     #[must_use]
     pub fn signature_verification(mut self, verification_key: VerifyingKey) -> Self {
         self.verification_key = Some(verification_key);
