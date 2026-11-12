@@ -87,7 +87,7 @@
 //! }
 //! ```
 //!
-//! A state starts from its `Default`. An event of a type that the enum does not list is left out, and upcasters turn events of older types into current ones (see `State::upcasters`).
+//! A state starts from its `Default`. Its enum lists every event type that its subject holds, since an event of a type it does not list makes reading the state fail permanently: an event that the state has nothing to do with gets a variant all the same, for which `evolve` returns the state unchanged. Upcasters turn events of older types into current ones (see `State::upcasters`).
 //!
 //! ## Deciding on Commands
 //!
@@ -663,6 +663,8 @@
 //!
 //! A query is sent with the HTTP method `QUERY`, with the query as its body, and answered with what the view holds, or with 404 if it holds nothing. A caller that has just sent a command passes its revision in the header `Wait-For-Revision`, and the query waits until the view has seen it, for at most `DEFAULT_WAIT`, so that the caller reads what it has written. The answer names the revision of the view, and carries a tag, so that a caller that holds the answer already gets 304.
 //!
+//! A query that reads several items takes the stream that `View::all` hands out through the steps of the module `query`, such as `order_by`, `first`, `single`, and `try_count`, next to `try_filter`, `skip`, and `take` of the `futures` crate. With `?`, a query that `single` finds no item for is answered with 404 as well.
+//!
 //! The router puts it all together, with the probes of an orchestrator such as Kubernetes, and an answer to a handler that panics:
 //!
 //! ```rust
@@ -1014,6 +1016,7 @@ mod event;
 #[cfg(feature = "http")]
 pub mod httpapi;
 mod projection;
+pub mod query;
 mod read;
 #[cfg(doctest)]
 mod refusals;

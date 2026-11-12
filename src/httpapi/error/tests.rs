@@ -19,7 +19,7 @@ use super::HttpError;
 use crate::{
     Categorized, Category, DomainError, ExecuteError, Failure, LoadError, LowerBound, Permanent,
     ReadOptions, Revision, Subject, SubjectScheme, Transient, UpperBound, check_read_options,
-    httpapi::logs::captured,
+    httpapi::logs::captured, query::SingleError,
 };
 
 /// An error of a category the test names, as an application has one.
@@ -168,6 +168,21 @@ fn every_kind() -> Vec<(&'static str, HttpError, StatusCode)> {
             "an error without a category",
             HttpError::of(Refused(None)),
             StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "a query that found no item",
+            SingleError::<Infallible>::NoItems.into(),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "a query that found several items",
+            SingleError::<Infallible>::TooManyItems.into(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "a view that failed while a query read it",
+            SingleError::View(Refused(Some(Category::Transient))).into(),
+            StatusCode::SERVICE_UNAVAILABLE,
         ),
     ]
 }
@@ -356,6 +371,12 @@ fn answers_a_refusal_with_a_fixed_text_and_logs_the_details_as_information() {
             "conflict: the data has changed since it was read",
             "/books/42",
         ),
+        (
+            "a query that found no item",
+            SingleError::<Infallible>::NoItems.into(),
+            "not found",
+            "no items",
+        ),
     ] {
         let (response, logged) = answered(error);
 
@@ -475,4 +496,15 @@ fn maps_an_error_of_a_decider_in_a_box_by_the_category_of_the_error() {
 
     assert_eq!(refusal.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(refusal.message(), "the book is lent out");
+}
+
+#[test]
+fn answers_a_query_that_found_several_items_with_500_and_logs_it_as_an_error() {
+    let (response, logged) = answered(SingleError::<Infallible>::TooManyItems.into());
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(message_of(&response), "internal server error");
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    assert_eq!(logged[0].0, Level::Error);
+    assert!(logged[0].1.contains("more than one item"), "{logged:?}");
 }
