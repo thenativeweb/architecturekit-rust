@@ -53,7 +53,7 @@ pub fn derive_events(input: TokenStream) -> TokenStream {
 
 /// Derives `architecturekit::Schema` for a type in the data of an event. See
 /// `architecturekit::Schema`.
-#[proc_macro_derive(Schema, attributes(schema))]
+#[proc_macro_derive(Schema, attributes(architecturekit))]
 pub fn derive_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     schema_with_of(&input)
@@ -121,16 +121,23 @@ fn event_attributes_of(input: &DeriveInput) -> Result<(LitStr, Option<Path>)> {
 }
 
 /// Reads the function the schema of a type goes through, if it names one, from
-/// `#[schema(with = "...")]`.
+/// `#[architecturekit(schema_with = "...")]`. The attribute is named after the
+/// kit, so that it does not collide with the `schema` attribute of other
+/// derives, such as the one of utoipa, and since it belongs to the kit, it
+/// takes nothing else.
 fn schema_with_of(input: &DeriveInput) -> Result<Option<Path>> {
     let mut schema_with: Option<Path> = None;
 
-    for attribute in input.attrs.iter().filter(|a| a.path().is_ident("schema")) {
+    for attribute in input
+        .attrs
+        .iter()
+        .filter(|a| a.path().is_ident("architecturekit"))
+    {
         attribute.parse_nested_meta(|meta| {
-            if meta.path.is_ident("with") {
+            if meta.path.is_ident("schema_with") {
                 return read_schema_with(&meta, &mut schema_with);
             }
-            Err(meta.error("expected `with = \"...\"`"))
+            Err(meta.error("expected `schema_with = \"...\"`"))
         })?;
     }
 

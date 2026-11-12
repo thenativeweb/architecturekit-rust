@@ -52,13 +52,40 @@ pub struct EventType;
 /// }
 /// ```
 ///
-/// A type that derives its schema takes nothing but `with`:
+/// A type that derives its schema takes nothing but `schema_with` in
+/// `#[architecturekit(...)]`:
 ///
 /// ```compile_fail
 /// fn short(derived: serde_json::Value) -> serde_json::Value { derived }
 ///
 /// #[derive(serde::Serialize, architecturekit::Schema)]
-/// #[schema(schema_with = "short")]
+/// #[architecturekit(with = "short")]
+/// struct Address {
+///     city: String,
+/// }
+/// ```
+///
+/// There, too, the function is named as a string:
+///
+/// ```compile_fail
+/// fn short(derived: serde_json::Value) -> serde_json::Value { derived }
+///
+/// #[derive(serde::Serialize, architecturekit::Schema)]
+/// #[architecturekit(schema_with = short)]
+/// struct Address {
+///     city: String,
+/// }
+/// ```
+///
+/// And it is named once:
+///
+/// ```compile_fail
+/// fn short(derived: serde_json::Value) -> serde_json::Value { derived }
+/// fn shorter(derived: serde_json::Value) -> serde_json::Value { derived }
+///
+/// #[derive(serde::Serialize, architecturekit::Schema)]
+/// #[architecturekit(schema_with = "short")]
+/// #[architecturekit(schema_with = "shorter")]
 /// struct Address {
 ///     city: String,
 /// }
