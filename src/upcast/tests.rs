@@ -163,7 +163,7 @@ fn applies_all_events_an_upcaster_splits_one_into_when_stepping() {
 
     let after = step_stored(
         &before,
-        stored("io.thenativeweb.test.credited.batch", json!({})),
+        &as_stored("io.thenativeweb.test.credited.batch", json!({})),
     )
     .expect("the event steps");
 
@@ -175,12 +175,75 @@ fn applies_all_events_an_upcaster_splits_one_into_when_stepping() {
 fn runs_the_upcasters_when_stepping() {
     let after = step_stored(
         &Ledger::default(),
-        stored("io.thenativeweb.test.credited.v1", json!({ "amount": 10 })),
+        &as_stored("io.thenativeweb.test.credited.v1", json!({ "amount": 10 })),
     )
     .expect("the event steps");
 
     assert_eq!(after.total, 10);
     assert_eq!(after.currency, "EUR");
+}
+
+/// Returns an event of the client SDK, as the database stores it and a
+/// projection of stored events gets it, with the ID 7 on the subject
+/// `/books/42`.
+fn as_stored(event_type: &str, data: Value) -> eventsourcingdb::Event {
+    crate::projection::tests::stored("7", event_type, data)
+}
+
+/// Where a book was put, which the first version took from the metadata of the
+/// event rather than writing it into the data.
+#[derive(Serialize, Deserialize, Event)]
+#[event(type = "io.thenativeweb.test.placed.v2")]
+struct Placed {
+    subject: String,
+    event_id: u64,
+}
+
+#[derive(Events)]
+enum ShelfEvent {
+    Placed(Placed),
+}
+
+#[derive(Clone, Debug, Default)]
+struct Shelf {
+    subject: String,
+    event_id: u64,
+}
+
+static SHELF_UPCASTERS: LazyLock<Upcasters> = LazyLock::new(|| {
+    Upcasters::new().upcast("io.thenativeweb.test.placed.v1", |event| {
+        let data = json!({ "subject": event.subject().to_string(), "event_id": event.id().get() });
+
+        Ok::<_, Infallible>(vec![event.with_type(Placed::EVENT_TYPE).with_data(data)])
+    })
+});
+
+impl State for Shelf {
+    type Event = ShelfEvent;
+
+    fn evolve(self, event: &ShelfEvent) -> Self {
+        let ShelfEvent::Placed(placed) = event;
+        Shelf {
+            subject: placed.subject.clone(),
+            event_id: placed.event_id,
+        }
+    }
+
+    fn upcasters() -> Option<&'static Upcasters> {
+        Some(&SHELF_UPCASTERS)
+    }
+}
+
+#[test]
+fn hands_the_metadata_of_the_stored_event_to_the_upcasters_when_stepping() {
+    let after = step_stored(
+        &Shelf::default(),
+        &as_stored("io.thenativeweb.test.placed.v1", json!({})),
+    )
+    .expect("the event steps");
+
+    assert_eq!(after.subject, "/books/42");
+    assert_eq!(after.event_id, 7);
 }
 
 #[test]

@@ -32,8 +32,7 @@ impl UpcastEvent {
     /// Creates a stored event of the given type with the given data, with the
     /// ID 0, on the subject `/`, without a source, at the start of 1970. It is
     /// meant for tests of upcasters, together with
-    /// [`replay_stored`](crate::replay_stored) and
-    /// [`step_stored`](crate::step_stored).
+    /// [`replay_stored`](crate::replay_stored).
     #[must_use]
     pub fn new(event_type: impl Into<String>, data: Value) -> Self {
         Self {

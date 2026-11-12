@@ -344,7 +344,7 @@ fn panics_for_a_state_that_starts_from_an_event_type_without_rule() {
 fn steps_a_stored_event() {
     let after = step_stored(
         &Counter { total: 1 },
-        UpcastEvent::new(Incremented::EVENT_TYPE, json!({ "by": 2 })),
+        &crate::projection::tests::stored("0", Incremented::EVENT_TYPE, json!({ "by": 2 })),
     )
     .expect("the event steps");
 
