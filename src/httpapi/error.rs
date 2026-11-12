@@ -7,7 +7,7 @@ use super::answer::json;
 use crate::{
     Categorized, Category, EmptyRange, ExecuteError, LoadError, NotARevision, NotASubject,
     PreconditionsError, ReadError, ReadOptionsError, RegisterSchemasError, SubjectValuesError,
-    Transient, WriteError,
+    Transient, WriteError, query::SingleError,
 };
 
 #[cfg(test)]
@@ -42,6 +42,7 @@ enum Logged {
 /// | [`unauthorized`](HttpError::unauthorized) | 401 | `unauthorized` |
 /// | [`forbidden`](HttpError::forbidden) | 403 | `forbidden: …` |
 /// | [`not_found`](HttpError::not_found) | 404 | `not found: …` |
+/// | no item for [`single`](crate::query::QueryExt::single) | 404 | `not found` |
 /// | [`malformed`](HttpError::malformed), a value that is not a revision or not a subject, values that can not compose a subject, an empty range | 400 | its own |
 /// | [`too_large`](HttpError::too_large) | 413 | `request body too large: …` |
 /// | [`unsupported_media_type`](HttpError::unsupported_media_type) | 415 | `unsupported media type: …` |
@@ -343,6 +344,24 @@ impl From<SubjectValuesError> for HttpError {
 impl From<EmptyRange> for HttpError {
     fn from(refusal: EmptyRange) -> Self {
         Self::told(StatusCode::BAD_REQUEST, refusal.to_string())
+    }
+}
+
+/// Answers the failure of a query that expected a single item: no item with
+/// 404 and the fixed text `not found`, since nothing says what was not found,
+/// logged as information; several items with 500 and a fixed text, logged as
+/// an error, since a query that expects one item and finds several is a
+/// mistake of the program; and a failure of the view by its category, as
+/// [`HttpError::of`] does.
+impl<E: Error + Categorized + Send + Sync + 'static> From<SingleError<E>> for HttpError {
+    fn from(error: SingleError<E>) -> Self {
+        match error {
+            refusal @ SingleError::NoItems => {
+                Self::refused(StatusCode::NOT_FOUND, "not found", Box::new(refusal))
+            }
+            mistake @ SingleError::TooManyItems => Self::internal(mistake),
+            SingleError::View(failure) => Self::of(failure),
+        }
     }
 }
 

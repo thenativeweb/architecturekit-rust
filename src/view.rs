@@ -36,9 +36,10 @@ pub trait View<T>: Send + Sync {
     /// fail halfway, for example when its connection breaks, and it ends after
     /// an error.
     ///
-    /// The steps of a query come from `TryStreamExt` of the `futures` crate,
-    /// such as `try_filter`, `map_ok`, `try_next` and `try_collect`. To order
-    /// the items, collect them first.
+    /// The steps of a query come from `TryStreamExt` and `StreamExt` of the
+    /// `futures` crate, such as `try_filter`, `map_ok`, `skip`, `take` and
+    /// `try_collect`, and from [`QueryExt`](crate::query::QueryExt), which
+    /// orders the items, and gets the first, the single one, or their number.
     fn all(&self) -> impl Stream<Item = Result<T, Self::Error>> + Send;
 }
 
