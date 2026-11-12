@@ -58,6 +58,7 @@ dependencies = [
  "serde_ignored",
  "serde_json",
  "serde_path_to_error",
+ "testcontainers",
  "tokio",
  "tokio-util",
  "tower",

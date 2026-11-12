@@ -1,7 +1,9 @@
 //! Given-when-then for deciders, driving projections with stored events, and
-//! a database in a container for the tests that need a real one. The module needs the feature `testing`, and
-//! [`Database`] the feature `testcontainers`, which turns on `testing` as well,
-//! so that a test that only checks a decider builds without Docker.
+//! a database in a container for the tests that need a real one, which the
+//! tests of a program share or a test has of its own. The module needs the
+//! feature `testing`, and [`Database`], [`store`], and [`store_with`] the
+//! feature `testcontainers`, which turns on `testing` as well, so that a test
+//! that only checks a decider builds without Docker.
 //!
 //! A decider decides asynchronously, so a test waits for its decision:
 //!
@@ -69,7 +71,7 @@ mod fixture;
 mod projection;
 
 #[cfg(feature = "testcontainers")]
-pub use database::Database;
+pub use database::{Database, store, store_with};
 pub use fixture::{Decision, Fixture, given, given_stored};
 pub use projection::{
     StoredEvent, project, project_transactional, stored_events, stored_events_at,
