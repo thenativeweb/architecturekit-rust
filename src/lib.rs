@@ -319,6 +319,8 @@
 //! }
 //! ```
 //!
+//! A projection that needs no type of its own, such as one that logs, comes from a function with `projection_fn`, which gets every event as an `Envelope`, and returns a future of the result.
+//!
 //! `seen` tells the view about every event the projection has handled, including those it had nothing to do with, so that a query can wait for a revision. The store starts a run of the projection, which reads the events stored so far, and then follows the events as they are written:
 //!
 //! ```rust
@@ -1035,9 +1037,9 @@ pub use decider::Decider;
 pub use error::{Categorized, Category, DomainError, Failure, Permanent, Transient};
 pub use event::Event;
 pub use projection::{
-    CaughtUpError, Envelope, Phase, Projected, Projection, ProjectionError, ProjectionOptions,
-    ProjectionRun, ProjectionStatus, Reconnect, ResumableProjection, Transaction,
-    TransactionalProjection, wait_caught_up,
+    CaughtUpError, Envelope, Phase, Projected, Projection, ProjectionError, ProjectionFn,
+    ProjectionOptions, ProjectionRun, ProjectionStatus, Reconnect, ResumableProjection,
+    Transaction, TransactionalProjection, projection_fn, wait_caught_up,
 };
 pub use read::{
     EmptyRange, IfLatestEventIsMissing, LowerBound, Order, ReadOptions, ReadOptionsError, Subjects,
