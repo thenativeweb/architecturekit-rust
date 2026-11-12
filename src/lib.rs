@@ -22,7 +22,7 @@
 //! - `http` answers commands and queries over HTTP, with the types of the `http` crate.
 //! - `axum` adds extractors and handlers for axum 0.8, and turns on `http`.
 //! - `testing` adds helpers to test deciders and projections.
-//! - `testcontainers` adds an EventSourcingDB in a container of a test's own, and turns on `testing`.
+//! - `testcontainers` adds an EventSourcingDB in a container, which the tests of a program share or a test has of its own, and turns on `testing`.
 //!
 //! ## Defining Events
 //!
@@ -817,7 +817,7 @@
 //!
 //! ## Testing Deciders
 //!
-//! The feature `testing` adds given-when-then for deciders in `architecturekit::testing`, and the feature `testcontainers` adds an EventSourcingDB in a container of a test's own, which needs Docker. Turn them on for the tests only:
+//! The feature `testing` adds given-when-then for deciders in `architecturekit::testing`, and the feature `testcontainers` adds an EventSourcingDB in a container, which the tests of a program share or a test has of its own, and which needs Docker. Turn them on for the tests only:
 //!
 //! ```shell
 //! cargo add architecturekit --dev --features testcontainers
