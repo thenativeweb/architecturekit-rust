@@ -202,7 +202,7 @@ async fn hands_out_a_store_with_the_options_of_its_builder() {
         .load(&unique_subject())
         .await
         .expect("the store reads from the database");
-    assert!(journal.entries.is_empty());
+    assert_eq!(journal.entries, Vec::<String>::new());
 }
 
 /// Returns a subject that no other test writes to, since the tests of a
