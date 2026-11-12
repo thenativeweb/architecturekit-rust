@@ -941,3 +941,22 @@ async fn sorts_failures_by_status_when_reading_the_registered_schemas() {
 
     assert_eq!(failure.category(), Some(Category::Transient), "{failure:?}");
 }
+
+#[cfg(feature = "pem")]
+#[test]
+fn reads_the_verification_key_from_a_pem_file_with_the_feature_pem() {
+    use ed25519_dalek::{
+        SigningKey, VerifyingKey,
+        pkcs8::{DecodePublicKey, EncodePublicKey, spki::der::pem::LineEnding},
+    };
+
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let pem = signing_key
+        .verifying_key()
+        .to_public_key_pem(LineEnding::LF)
+        .expect("the key encodes as PEM");
+
+    let read = VerifyingKey::from_public_key_pem(&pem).expect("the key reads from PEM");
+
+    assert_eq!(read, signing_key.verifying_key());
+}

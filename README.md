@@ -21,6 +21,7 @@ architecturekit needs Rust 1.88 or later. Its features are:
 - `derive`, which is on by default, derives events, their enums, and their schemas.
 - `http` answers commands and queries over HTTP, with the types of the `http` crate.
 - `axum` adds extractors and handlers for axum 0.8, and turns on `http`.
+- `pem` reads the key that the signatures of events are verified with from a PEM file.
 - `testing` adds helpers to test deciders and projections.
 - `testcontainers` adds an EventSourcingDB in a container, which the tests of a program share or a test has of its own, and turns on `testing`.
 

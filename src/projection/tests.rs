@@ -433,3 +433,53 @@ fn reports_a_panic_with_its_message() {
         "permanent failure: the projection panicked: a value that is no text"
     );
 }
+
+#[test]
+fn decodes_a_stored_event_with_its_metadata() {
+    let event = stored("7", BookAcquired::EVENT_TYPE, json!({ "title": "2001" }));
+
+    let envelope = crate::decode::<BookAcquired>(&event).expect("the event decodes");
+
+    assert_eq!(envelope.id, Revision::from(7_u32));
+    assert_eq!(envelope.subject, Subject::new("/books/42"));
+    assert_eq!(envelope.event_type, BookAcquired::EVENT_TYPE);
+    assert_eq!(envelope.source, "https://thenativeweb.io");
+    assert_eq!(
+        envelope.trace_parent.as_deref(),
+        Some("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+    );
+    assert_eq!(envelope.part, 0);
+    assert_eq!(
+        envelope.data,
+        BookAcquired {
+            title: "2001".to_owned()
+        }
+    );
+}
+
+#[test]
+fn refuses_to_decode_an_event_of_another_type() {
+    let event = stored("7", BookAcquired::EVENT_TYPE, json!({ "title": "2001" }));
+
+    let failure = crate::decode::<BookBorrowed>(&event).expect_err("the type differs");
+
+    assert!(matches!(failure, Permanent::Other(_)), "{failure:?}");
+    assert_eq!(
+        failure.to_string(),
+        r#"permanent failure: event 7 has the type "io.thenativeweb.test.book-acquired", not "io.thenativeweb.test.book-borrowed""#
+    );
+}
+
+#[test]
+fn refuses_to_decode_data_that_does_not_match_the_type() {
+    let event = stored("7", BookAcquired::EVENT_TYPE, json!({ "title": 2001 }));
+
+    let failure = crate::decode::<BookAcquired>(&event).expect_err("the data differs");
+
+    assert!(
+        failure.to_string().starts_with(
+            r#"permanent failure: decoding event 7 of type "io.thenativeweb.test.book-acquired""#
+        ),
+        "{failure}"
+    );
+}

@@ -74,5 +74,6 @@ mod projection;
 pub use database::{Database, store, store_with};
 pub use fixture::{Decision, Fixture, given, given_stored};
 pub use projection::{
-    StoredEvent, project, project_transactional, stored_events, stored_events_at,
+    StoredEvent, expect_items, items_of, project, project_transactional, stored_events,
+    stored_events_at,
 };

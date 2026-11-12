@@ -3,8 +3,8 @@ use std::{error::Error, fmt, future::Future};
 use chrono::{DateTime, Utc};
 
 use crate::{
-    Categorized, Category, Events, Failure, Permanent, Revision, Subject, Transient, UpcastEvent,
-    Upcasters, revision::id_of, subject::subject_of,
+    Categorized, Category, Event, Events, Failure, Permanent, Revision, Subject, Transient,
+    UpcastEvent, Upcasters, revision::id_of, subject::subject_of,
 };
 
 mod function;
@@ -57,6 +57,71 @@ pub struct Envelope<E> {
 
 /// The source of the events that a test makes up.
 pub(crate) const MADE_UP_SOURCE: &str = "https://architecturekit.test";
+
+/// Decodes a stored event into an envelope of an event of the given type, with
+/// the metadata that the database recorded, such as one of the events that
+/// [`Store::execute`](crate::Store::execute) or
+/// [`Store::write`](crate::Store::write) return:
+///
+/// ```no_run
+/// # use architecturekit::{Event, Store};
+/// # use serde::{Deserialize, Serialize};
+/// # #[derive(Serialize, Deserialize, Event)]
+/// # #[event(type = "io.eventsourcingdb.library.book-acquired")]
+/// # struct BookAcquired { title: String }
+/// # fn example(written: Vec<architecturekit::eventsourcingdb::Event>) -> Result<(), architecturekit::Permanent> {
+/// use architecturekit::decode;
+///
+/// let mut titles = Vec::new();
+/// for event in &written {
+///     if event.ty() == BookAcquired::EVENT_TYPE {
+///         titles.push(decode::<BookAcquired>(event)?.data.title);
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
+///
+/// No upcasters run, since the events that were just written have the current
+/// types.
+///
+/// # Errors
+///
+/// Fails permanently if the event has another type, if its data does not match
+/// the type, or if its ID or subject is not one, neither of which the database
+/// ever writes.
+pub fn decode<E: Event>(stored: &eventsourcingdb::Event) -> Result<Envelope<E>, Permanent> {
+    let id = id_of(stored)?;
+    if stored.ty() != E::EVENT_TYPE {
+        return Err(Permanent::Other(Failure::new(
+            format!(
+                "event {id} has the type {:?}, not {:?}",
+                stored.ty(),
+                E::EVENT_TYPE
+            ),
+            None,
+        )));
+    }
+
+    let data = serde_json::from_value(stored.data().clone()).map_err(|cause| {
+        Permanent::Other(Failure::new(
+            format!("decoding event {id} of type {:?}", E::EVENT_TYPE),
+            Some(Box::new(cause)),
+        ))
+    })?;
+
+    Ok(Envelope {
+        id,
+        time: *stored.time(),
+        source: stored.source().to_owned(),
+        subject: subject_of(stored)?,
+        event_type: E::EVENT_TYPE.to_owned(),
+        trace_parent: stored.traceparent().map(ToOwned::to_owned),
+        trace_state: stored.tracestate().map(ToOwned::to_owned),
+        part: 0,
+        data,
+    })
+}
 
 impl<E: Events> Envelope<E> {
     /// An envelope of the given event, with the given subject and ID, as part

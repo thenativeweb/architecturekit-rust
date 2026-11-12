@@ -6,19 +6,23 @@
 use std::{
     error::Error,
     fmt,
+    panic::AssertUnwindSafe,
     sync::{Arc, LazyLock, Mutex},
 };
 
 use chrono::{DateTime, TimeDelta, Utc};
-use futures_util::TryStreamExt;
+use futures_util::{FutureExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
-    Categorized, Category, Envelope, Event, Events, InMemoryView, Projection, ProjectionError,
-    Revision, Subject, Transaction, TransactionalProjection, UpcastEvent, Upcasters, View,
-    ViewError,
-    testing::{StoredEvent, project, project_transactional, stored_events, stored_events_at},
+    Categorized, Category, Envelope, Event, Events, Failure, InMemoryView, Permanent, Projection,
+    ProjectionError, Revision, Subject, Transaction, TransactionalProjection, UpcastEvent,
+    Upcasters, View, ViewError,
+    testing::{
+        StoredEvent, expect_items, items_of, project, project_transactional, stored_events,
+        stored_events_at,
+    },
 };
 
 #[derive(Debug, Serialize, Deserialize, Event)]
@@ -719,4 +723,76 @@ async fn drives_a_typed_transaction() {
     .expect("the events are applied");
 
     assert_eq!(table.committed.entries(), ["golo", "jane"]);
+}
+
+/// A view that holds a fixed list of items, or fails while it is read.
+struct Shelf(Result<Vec<String>, ()>);
+
+impl View<String> for Shelf {
+    type Error = ViewError;
+
+    fn all(&self) -> impl futures_util::Stream<Item = Result<String, ViewError>> + Send {
+        let elements: Vec<Result<String, ViewError>> = match &self.0 {
+            Ok(items) => items.iter().cloned().map(Ok).collect(),
+            Err(()) => vec![Err(broken())],
+        };
+        futures_util::stream::iter(elements)
+    }
+}
+
+/// A failure of a view, as one in a database reports a broken connection.
+fn broken() -> ViewError {
+    ViewError::Permanent(Permanent::Other(Failure::new("the shelf broke", None)))
+}
+
+fn shelf(items: &[&str]) -> Shelf {
+    Shelf(Ok(items.iter().map(|&item| item.to_owned()).collect()))
+}
+
+#[tokio::test]
+async fn hands_out_the_items_of_a_view() {
+    let items = items_of(&shelf(&["2001", "2010"])).await;
+
+    assert_eq!(items, ["2001", "2010"]);
+}
+
+#[tokio::test]
+async fn expects_exactly_the_items_in_their_order() {
+    expect_items(
+        &shelf(&["2001", "2010"]),
+        ["2001".to_owned(), "2010".to_owned()],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn fails_expect_items_for_other_items_or_another_order() {
+    let failure = AssertUnwindSafe(expect_items(
+        &shelf(&["2001", "2010"]),
+        ["2010".to_owned(), "2001".to_owned()],
+    ))
+    .catch_unwind()
+    .await
+    .expect_err("the order differs");
+
+    let message = failure
+        .downcast_ref::<String>()
+        .expect("the failure has a message");
+    assert_eq!(
+        message,
+        r#"expected the items ["2010", "2001"], got ["2001", "2010"]"#
+    );
+}
+
+#[tokio::test]
+async fn fails_items_of_for_a_view_that_fails() {
+    let failure = AssertUnwindSafe(items_of(&Shelf(Err(()))))
+        .catch_unwind()
+        .await
+        .expect_err("the view fails");
+
+    let message = failure
+        .downcast_ref::<String>()
+        .expect("the failure has a message");
+    assert!(message.starts_with("reading the view: "), "{message}");
 }
