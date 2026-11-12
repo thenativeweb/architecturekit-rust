@@ -592,14 +592,14 @@ fn replaces_the_schema_of_an_event_with_schema_with() {
 }
 
 #[test]
-fn starts_the_schema_of_a_nested_type_from_the_derived_one_with_with() {
+fn starts_the_schema_of_a_nested_type_from_the_derived_one_with_schema_with() {
     fn with_a_short_city(mut derived: Value) -> Value {
         derived["properties"]["city"]["maxLength"] = json!(100);
         derived
     }
 
     #[derive(Serialize, Deserialize, Schema)]
-    #[schema(with = "with_a_short_city")]
+    #[architecturekit(schema_with = "with_a_short_city")]
     struct Address {
         city: String,
     }
@@ -613,4 +613,26 @@ fn starts_the_schema_of_a_nested_type_from_the_derived_one_with_with() {
     assert_schema::<ReaderMoved>(
         r#"{"additionalProperties":false,"properties":{"address":{"additionalProperties":false,"properties":{"city":{"maxLength":100,"type":"string"}},"required":["city"],"type":"object"}},"required":["address"],"type":"object"}"#,
     );
+}
+
+#[test]
+fn leaves_the_schema_attribute_to_other_derives_such_as_the_one_of_utoipa() {
+    fn with_a_short_city(mut derived: Value) -> Value {
+        derived["properties"]["city"]["maxLength"] = json!(100);
+        derived
+    }
+
+    #[derive(Serialize, Deserialize, Schema, utoipa::ToSchema)]
+    #[schema(title = "Mailing address")]
+    #[architecturekit(schema_with = "with_a_short_city")]
+    struct Address {
+        city: String,
+    }
+
+    assert_schema::<Address>(
+        r#"{"additionalProperties":false,"properties":{"city":{"maxLength":100,"type":"string"}},"required":["city"],"type":"object"}"#,
+    );
+    let described_by_utoipa = serde_json::to_value(<Address as utoipa::PartialSchema>::schema())
+        .expect("the schema of utoipa can be written");
+    assert_eq!(described_by_utoipa["title"], "Mailing address");
 }
