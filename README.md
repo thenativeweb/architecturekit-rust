@@ -206,6 +206,8 @@ impl Projection for BookList {
 }
 ```
 
+A projection that needs no type of its own, such as one that logs, comes from a function with `projection_fn`, which gets every event as an `Envelope`, and returns a future of the result.
+
 `seen` tells the view about every event the projection has handled, including those it had nothing to do with, so that a query can wait for a revision. The store starts a run of the projection, which reads the events stored so far, and then follows the events as they are written:
 
 ```rust

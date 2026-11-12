@@ -7,10 +7,12 @@ use crate::{
     Upcasters, revision::id_of, subject::subject_of,
 };
 
+mod function;
 mod run;
 #[cfg(test)]
 pub(crate) mod tests;
 
+pub use function::{ProjectionFn, projection_fn};
 pub use run::{
     CaughtUpError, Phase, ProjectionOptions, ProjectionRun, ProjectionStatus, Reconnect,
     wait_caught_up,
