@@ -895,7 +895,7 @@
 //! # }
 //! ```
 //!
-//! `then_failed` compares the error of the decider, which therefore implements `PartialEq` and `Debug`. `then_events` compares events by their type and the JSON of their data, which is what would be stored, so they need no `PartialEq`, and `then_preconditions` compares the preconditions they are written with.
+//! `then_failed` compares the error of the decider, which therefore implements `PartialEq` and `Debug`. `then_failed_in` expects any error of a category instead, such as `Category::Domain`, and `then_failed_matching` an error that a function accepts, such as a refusal of the kit. `then_events` compares events by their type and the JSON of their data, which is what would be stored, so they need no `PartialEq`, and `then_preconditions` compares the preconditions they are written with.
 //!
 //! ## Testing Projections
 //!
