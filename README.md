@@ -275,7 +275,7 @@ async fn borrow(
 }
 ```
 
-`Strict` reads the body as JSON, and refuses a body that does not fit, also because of a field that the type does not have, or a list where an object belongs, with 400 and what is wrong, such as `{"message":"malformed request: unknown field \"raeder\""}`. serde decodes an enum with `#[serde(untagged)]` or `#[serde(tag = "…")]`, and a field with `#[serde(flatten)]`, from a copy of its own that no strict reading reaches, so within them neither of these two is refused. `SubjectScheme::try_build` refuses an ID that can not be part of a subject, such as `a.b`, which `?` answers with 400 as well, where `build` would panic. A command that has succeeded is answered with the revision it wrote, such as `{"revision":"42"}`. Every error of architecturekit turns into an `HttpError` with `?`, which answers it by its category:
+`Strict` reads the body as JSON, and refuses a body that does not fit, also because of a field that the type does not have, or a list where an object belongs, with 400 and what is wrong, such as `{"message":"malformed request: unknown field \"raeder\""}`. serde decodes an enum with `#[serde(untagged)]` or `#[serde(tag = "…")]`, and a field with `#[serde(flatten)]`, from a copy of its own that no strict reading reaches, so within them neither of these two is refused. `SubjectScheme::try_build` refuses an ID that can not be part of a subject, such as `a.b`, which `?` answers with 400 as well, where `build` would panic. A command that has succeeded is answered with the revision it wrote, such as `{"revision":"42"}`. Every error of architecturekit that a handler meets turns into an `HttpError` with `?`, which answers it by its category:
 
 | Failure | Status | Message |
 |---|---|---|
@@ -286,7 +286,7 @@ async fn borrow(
 | a write whose outcome is unknown | 500 | `outcome unknown: the request may have succeeded` |
 | any other failure | 500 | `internal server error` |
 
-A fixed message keeps internals from the caller, and its cause is logged with the `log` crate. The one error that does not turn into an `HttpError` with `?` is the one of `wait_for_written`, which waits until a view has seen what a command wrote: the command has succeeded, so it is answered as a success, with `CommandAnswer::with_result`, which logs that the view lags behind. Who may send a command is up to the application: it determines the user with an extractor of its own, and refuses with `HttpError::unauthorized` or `HttpError::forbidden`.
+A fixed message keeps internals from the caller, and its cause is logged with the `log` crate. The one such error that does not turn into an `HttpError` with `?` is the one of `wait_for_written`, which waits until a view has seen what a command wrote: the command has succeeded, so it is answered as a success, with `CommandAnswer::with_result`, which logs that the view lags behind. Who may send a command is up to the application: it determines the user with an extractor of its own, and refuses with `HttpError::unauthorized` or `HttpError::forbidden`.
 
 A query is a handler of axum as well, which reads a view:
 
