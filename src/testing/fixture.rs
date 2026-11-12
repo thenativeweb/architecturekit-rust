@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::{
     Categorized, Category, Command, Decider, Events, ExecuteError, Precondition, State, Subject,
-    UpcastEvent, check_preconditions, replay, replay_stored, store::unencodable,
+    check_preconditions, replay, replay_stored, store::unencodable, testing::StoredEvent,
 };
 
 #[cfg(test)]
@@ -47,10 +47,12 @@ pub fn given<C, S: State, D>(
     Fixture { decider, state }
 }
 
-/// Builds the state a command will be decided on from events in their stored
-/// shape, running the upcasters of the state on the way. Use it to test that an
-/// older event type still arrives correctly, which typed events can not show.
-/// It needs the feature `testing`.
+/// Builds the state a command will be decided on from events in the shape the
+/// database stores them in, running the upcasters of the state on the way, as
+/// [`replay_stored`] does. Use it to test that an older event type still
+/// arrives correctly, which typed events can not show, with events that
+/// [`StoredEvent::raw`] builds. The upcasters see the subject, ID, time and
+/// source of every event. It needs the feature `testing`.
 ///
 /// # Panics
 ///
@@ -59,9 +61,9 @@ pub fn given<C, S: State, D>(
 #[track_caller]
 pub fn given_stored<C, S: State, D>(
     decider: &Decider<C, S, D>,
-    history: impl IntoIterator<Item = UpcastEvent>,
+    history: impl IntoIterator<Item = StoredEvent>,
 ) -> Fixture<'_, C, S, D> {
-    let state = match replay_stored(history) {
+    let state = match replay_stored(history.into_iter().map(Into::into)) {
         Ok(state) => state,
         Err(failure) => panic!("given stored: {}", chain(&failure)),
     };

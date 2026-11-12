@@ -247,23 +247,77 @@ pub fn replay<S: State>(history: impl IntoIterator<Item = S::Event>) -> Result<S
 
 /// Folds stored events into a state, running the upcasters on the way,
 /// exactly as reading from the database would. It is meant for tests of
-/// upcasters, which need the shape of an older version.
+/// upcasters, which need the shape of an older version. It takes the events
+/// as the database stores them, so that the upcasters see their subject, ID,
+/// time and source. If the state starts from the latest event of a type (see
+/// [`State::from_latest`]), so does this, by the type under which an event is
+/// stored, as the database does.
+///
+/// With the feature `testing`, a test builds such events as `StoredEvent`s,
+/// which turn into events of the client SDK with `into`:
+///
+/// ```
+/// # use std::sync::LazyLock;
+/// # use architecturekit::{Event, Events, State, Upcasters};
+/// # use serde::{Deserialize, Serialize};
+/// # use serde_json::json;
+/// # #[derive(Serialize, Deserialize, Event)]
+/// # #[event(type = "io.eventsourcingdb.library.book-acquired.v2")]
+/// # struct BookAcquired { title: String, author: String }
+/// # #[derive(Events)]
+/// # enum BookEvent { Acquired(BookAcquired) }
+/// # static UPCASTERS: LazyLock<Upcasters> = LazyLock::new(|| {
+/// #     Upcasters::new().upcast("io.eventsourcingdb.library.book-acquired.v1", |event| {
+/// #         let title = event.data()["title"].clone();
+/// #         Ok::<_, std::convert::Infallible>(vec![
+/// #             event
+/// #                 .with_type("io.eventsourcingdb.library.book-acquired.v2")
+/// #                 .with_data(json!({ "title": title, "author": "unknown" })),
+/// #         ])
+/// #     })
+/// # });
+/// # #[derive(Clone, Default)]
+/// # struct Book { author: String }
+/// # impl State for Book {
+/// #     type Event = BookEvent;
+/// #     fn evolve(self, event: &BookEvent) -> Self {
+/// #         let BookEvent::Acquired(acquired) = event;
+/// #         Book { author: acquired.author.clone() }
+/// #     }
+/// #     fn upcasters() -> Option<&'static Upcasters> { Some(&UPCASTERS) }
+/// # }
+/// # #[cfg(feature = "testing")]
+/// # {
+/// use architecturekit::{Subject, replay_stored, testing::StoredEvent};
+///
+/// // v1 had no author.
+/// let book: Book = replay_stored([StoredEvent::raw(
+///     Subject::new("/books/42"),
+///     0,
+///     "io.eventsourcingdb.library.book-acquired.v1",
+///     json!({ "title": "2001" }),
+/// )
+/// .into()])?;
+/// assert_eq!(book.author, "unknown");
+/// # }
+/// # Ok::<(), architecturekit::Permanent>(())
+/// ```
 ///
 /// # Errors
 ///
 /// Fails permanently if an upcaster fails, if an event has a type the state
-/// has no rule for, or if its data does not match its type.
+/// has no rule for, if its data does not match its type, or if its ID or
+/// subject is not one, neither of which the database ever writes.
 pub fn replay_stored<S: State>(
-    history: impl IntoIterator<Item = UpcastEvent>,
+    history: impl IntoIterator<Item = eventsourcingdb::Event>,
 ) -> Result<S, Permanent> {
-    let history: Vec<UpcastEvent> = history.into_iter().collect();
-    let start = start_of(&history, UpcastEvent::event_type, from_latest_of::<S>());
+    let history: Vec<eventsourcingdb::Event> = history.into_iter().collect();
+    let start = start_of(&history, eventsourcingdb::Event::ty, from_latest_of::<S>());
 
-    history
-        .into_iter()
-        .skip(start)
+    history[start..]
+        .iter()
         .try_fold(S::default(), |current, stored| {
-            evolve_by_stored(current, stored)
+            evolve_by_stored(current, UpcastEvent::from_stored(stored)?)
         })
 }
 
@@ -287,12 +341,20 @@ pub fn step<S: State>(current: &S, event: &S::Event) -> Result<S, Permanent> {
 /// Otherwise, it behaves like [`step`].
 ///
 /// A projection that tells what each event changed keeps the state before an
-/// event, and steps it:
+/// event, and steps it. The projection gets the events of every subject, but
+/// the state has rules only for the events of its own subjects, and an event
+/// of a type without a rule makes `step_stored` fail, and with it the
+/// projection. So it steps only the events of the subjects of the state, which
+/// a [`SubjectScheme`](crate::SubjectScheme) tells apart from the others.
+/// Asking [`Events::has_rule`] instead would skip events of an older type as
+/// well, since it knows nothing of upcasters:
 ///
 /// ```
-/// use std::{collections::HashMap, convert::Infallible, sync::Mutex};
+/// use std::{collections::HashMap, future, sync::{LazyLock, Mutex}};
 ///
-/// use architecturekit::{Envelope, Events, State, eventsourcingdb, projection_fn, step_stored};
+/// use architecturekit::{
+///     Envelope, Events, State, SubjectScheme, eventsourcingdb, projection_fn, step_stored,
+/// };
 /// # #[derive(serde::Serialize, serde::Deserialize, architecturekit::Event)]
 /// # #[event(type = "io.eventsourcingdb.library.book-borrowed")]
 /// # struct BookBorrowed {}
@@ -305,18 +367,25 @@ pub fn step<S: State>(current: &S, event: &S::Event) -> Result<S, Permanent> {
 /// #     fn evolve(self, _: &BookEvent) -> Self { Book { is_borrowed: true } }
 /// # }
 ///
+/// static BOOKS: LazyLock<SubjectScheme> = LazyLock::new(|| SubjectScheme::new("/books/{book_id}"));
+///
 /// let books: Mutex<HashMap<String, Book>> = Mutex::default();
 /// let history = projection_fn(move |event: Envelope<eventsourcingdb::Event>| {
+///     let Some(book_id) = BOOKS.value(&event.subject, "book_id") else {
+///         // An event of another subject, such as one of a reader.
+///         return future::ready(Ok(()));
+///     };
+///
 ///     let mut books = books.lock().unwrap();
-///     let before = books.get(event.subject.as_str()).cloned().unwrap_or_default();
-///     let after = step_stored(&before, &event.data);
-///     if let Ok(after) = &after {
+///     let before = books.get(book_id).cloned().unwrap_or_default();
+///     let after = step_stored(&before, &event.data).map(|after| {
 ///         if !before.is_borrowed && after.is_borrowed {
 ///             // The book was borrowed by this event.
 ///         }
-///         books.insert(event.subject.to_string(), after.clone());
-///     }
-///     async move { after.map(|_| ()) }
+///         books.insert(book_id.to_owned(), after);
+///     });
+///
+///     future::ready(after)
 /// });
 /// ```
 ///

@@ -31,8 +31,33 @@ pub struct UpcastEvent {
 impl UpcastEvent {
     /// Creates a stored event of the given type with the given data, with the
     /// ID 0, on the subject `/`, without a source, at the start of 1970. It is
-    /// meant for tests of upcasters, together with
-    /// [`replay_stored`](crate::replay_stored).
+    /// meant for a test of a single upcaster function, which the test calls
+    /// directly:
+    ///
+    /// ```
+    /// use std::convert::Infallible;
+    ///
+    /// use architecturekit::UpcastEvent;
+    /// use serde_json::json;
+    ///
+    /// // v1 had no author.
+    /// fn add_author(event: UpcastEvent) -> Result<Vec<UpcastEvent>, Infallible> {
+    ///     let title = event.data()["title"].clone();
+    ///
+    ///     Ok(vec![
+    ///         event
+    ///             .with_type("io.eventsourcingdb.library.book-acquired.v2")
+    ///             .with_data(json!({ "title": title, "author": "unknown" })),
+    ///     ])
+    /// }
+    ///
+    /// let upcasted = add_author(UpcastEvent::new(
+    ///     "io.eventsourcingdb.library.book-acquired.v1",
+    ///     json!({ "title": "2001" }),
+    /// ))?;
+    /// assert_eq!(upcasted[0].data(), &json!({ "title": "2001", "author": "unknown" }));
+    /// # Ok::<(), Infallible>(())
+    /// ```
     #[must_use]
     pub fn new(event_type: impl Into<String>, data: Value) -> Self {
         Self {
