@@ -159,6 +159,34 @@ fn fails_on_an_event_that_does_not_survive_being_written_and_read_back() {
 }
 
 #[test]
+fn replays_stored_events_as_the_database_hands_them_out() {
+    let counter: Counter = replay_stored([
+        stored("0", Incremented::EVENT_TYPE, json!({ "by": 1 })),
+        stored("1", Incremented::EVENT_TYPE, json!({ "by": 2 })),
+    ])
+    .expect("the history replays");
+
+    assert_eq!(counter.total, 3);
+}
+
+#[cfg(feature = "testing")]
+#[test]
+fn replays_stored_events_that_a_test_builds() {
+    use crate::{Subject, testing::stored_events};
+
+    let history = stored_events(
+        &Subject::new("/counters/1"),
+        [incremented(1), incremented(2)],
+    );
+
+    let borrowed: Counter = replay_stored(&history).expect("the history replays");
+    let owned: Counter = replay_stored(history).expect("the history replays");
+
+    assert_eq!(borrowed.total, 3);
+    assert_eq!(owned.total, 3);
+}
+
+#[test]
 fn fails_on_data_that_does_not_match_the_rule() {
     let failure = replay_stored::<Counter>([stored(
         "0",

@@ -20,6 +20,26 @@
 ///     title: String,
 /// }
 /// ```
+///
+/// `#[event(...)]` is only read on the type, so the derive refuses it on a
+/// field:
+///
+/// ```compile_fail
+/// #[derive(serde::Serialize, serde::Deserialize, architecturekit::Event)]
+/// #[event(type = "io.eventsourcingdb.library.book-acquired")]
+/// struct BookAcquired {
+///     #[event(nonsense = 1)]
+///     title: String,
+/// }
+/// ```
+///
+/// And on the field of a newtype struct:
+///
+/// ```compile_fail
+/// #[derive(serde::Serialize, serde::Deserialize, architecturekit::Event)]
+/// #[event(type = "io.eventsourcingdb.library.book-acquired")]
+/// struct BookAcquired(#[event(type = "io.eventsourcingdb.library.title")] String);
+/// ```
 pub struct EventType;
 
 /// The function that the schema of an event goes through is named as a
@@ -89,6 +109,40 @@ pub struct EventType;
 /// struct Address {
 ///     city: String,
 /// }
+/// ```
+///
+/// `#[architecturekit(...)]` is only read on the type, so the derive refuses
+/// it on a field:
+///
+/// ```compile_fail
+/// fn short(derived: serde_json::Value) -> serde_json::Value { derived }
+///
+/// #[derive(serde::Serialize, architecturekit::Schema)]
+/// struct Address {
+///     #[architecturekit(schema_with = "short")]
+///     city: String,
+/// }
+/// ```
+///
+/// Even on a field that serde skips:
+///
+/// ```compile_fail
+/// #[derive(serde::Serialize, architecturekit::Schema)]
+/// struct Address {
+///     city: String,
+///     #[serde(skip)]
+///     #[architecturekit(anything_goes, whatever = 42)]
+///     note: String,
+/// }
+/// ```
+///
+/// And on the field of a newtype struct:
+///
+/// ```compile_fail
+/// fn short(derived: serde_json::Value) -> serde_json::Value { derived }
+///
+/// #[derive(serde::Serialize, architecturekit::Schema)]
+/// struct City(#[architecturekit(schema_with = "short")] String);
 /// ```
 pub struct SchemaWith;
 

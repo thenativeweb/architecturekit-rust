@@ -249,12 +249,13 @@ pub fn replay<S: State>(history: impl IntoIterator<Item = S::Event>) -> Result<S
 /// exactly as reading from the database would. It is meant for tests of
 /// upcasters, which need the shape of an older version. It takes the events
 /// as the database stores them, so that the upcasters see their subject, ID,
-/// time and source. If the state starts from the latest event of a type (see
-/// [`State::from_latest`]), so does this, by the type under which an event is
-/// stored, as the database does.
+/// time and source: as events of the client SDK, such as those read from the
+/// database, or as anything that turns into one. If the state starts from the
+/// latest event of a type (see [`State::from_latest`]), so does this, by the
+/// type under which an event is stored, as the database does.
 ///
 /// With the feature `testing`, a test builds such events as `StoredEvent`s,
-/// which turn into events of the client SDK with `into`:
+/// which `replay_stored` takes as they are:
 ///
 /// ```
 /// # use std::sync::LazyLock;
@@ -296,8 +297,7 @@ pub fn replay<S: State>(history: impl IntoIterator<Item = S::Event>) -> Result<S
 ///     0,
 ///     "io.eventsourcingdb.library.book-acquired.v1",
 ///     json!({ "title": "2001" }),
-/// )
-/// .into()])?;
+/// )])?;
 /// assert_eq!(book.author, "unknown");
 /// # }
 /// # Ok::<(), architecturekit::Permanent>(())
@@ -309,9 +309,9 @@ pub fn replay<S: State>(history: impl IntoIterator<Item = S::Event>) -> Result<S
 /// has no rule for, if its data does not match its type, or if its ID or
 /// subject is not one, neither of which the database ever writes.
 pub fn replay_stored<S: State>(
-    history: impl IntoIterator<Item = eventsourcingdb::Event>,
+    history: impl IntoIterator<Item = impl Into<eventsourcingdb::Event>>,
 ) -> Result<S, Permanent> {
-    let history: Vec<eventsourcingdb::Event> = history.into_iter().collect();
+    let history: Vec<eventsourcingdb::Event> = history.into_iter().map(Into::into).collect();
     let start = start_of(&history, eventsourcingdb::Event::ty, from_latest_of::<S>());
 
     history[start..]

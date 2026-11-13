@@ -369,6 +369,59 @@ async fn drives_a_projection() {
 }
 
 #[tokio::test]
+async fn drives_a_projection_with_borrowed_stored_events() {
+    let owners = Owners { view: owner_view() };
+    let events: Vec<StoredEvent> = stored_events(
+        &Subject::new("/account/1"),
+        [opened("golo"), opened("jane")],
+    );
+
+    project(&owners, &events)
+        .await
+        .expect("the events are applied");
+
+    assert_eq!(all_of(&owners.view).await, ["golo", "jane"]);
+    assert_eq!(events.len(), 2, "the events are only borrowed");
+}
+
+#[tokio::test]
+async fn drives_a_projection_with_the_stored_events_it_is_handed() {
+    let owners = Owners { view: owner_view() };
+
+    project(
+        &owners,
+        stored_events(
+            &Subject::new("/account/1"),
+            [opened("golo"), opened("jane")],
+        ),
+    )
+    .await
+    .expect("the events are applied");
+
+    assert_eq!(all_of(&owners.view).await, ["golo", "jane"]);
+}
+
+#[tokio::test]
+async fn drives_a_projection_with_events_read_from_the_database() {
+    // The client SDK hands out the events read from the database as
+    // eventsourcingdb::Event, which converted stored events stand in for.
+    let owners = Owners { view: owner_view() };
+    let events: Vec<eventsourcingdb::Event> = stored_events(
+        &Subject::new("/account/1"),
+        [opened("golo"), opened("jane")],
+    )
+    .into_iter()
+    .map(Into::into)
+    .collect();
+
+    project(&owners, events)
+        .await
+        .expect("the events are applied");
+
+    assert_eq!(all_of(&owners.view).await, ["golo", "jane"]);
+}
+
+#[tokio::test]
 async fn reports_a_refusal() {
     let owners = Owners { view: owner_view() };
 
@@ -663,10 +716,31 @@ async fn applies_within_one_transaction() {
 }
 
 #[tokio::test]
+async fn applies_events_read_from_the_database_within_one_transaction() {
+    let table = OwnerTable::default();
+    let events: Vec<eventsourcingdb::Event> = stored_events(
+        &Subject::new("/account/1"),
+        [opened("golo"), opened("jane")],
+    )
+    .into_iter()
+    .map(Into::into)
+    .collect();
+
+    project_transactional(&table, events)
+        .await
+        .expect("the events are applied");
+
+    assert_eq!(
+        table.log.entries(),
+        ["begin", "apply 0", "apply 1", "commit 1"]
+    );
+}
+
+#[tokio::test]
 async fn begins_nothing_without_events() {
     let table = OwnerTable::default();
 
-    project_transactional(&table, &[])
+    project_transactional(&table, Vec::<StoredEvent>::new())
         .await
         .expect("nothing is applied");
 

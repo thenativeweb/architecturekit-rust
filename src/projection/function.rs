@@ -24,10 +24,12 @@ mod tests;
 ///
 /// A function brings along neither upcasters nor a record of what it has seen
 /// (see [`Projection::upcasters`] and [`Projection::seen`]). So a view that it
-/// fills never reaches a revision, and waiting for one, with the header
+/// fills reaches no revision by itself, and waiting for one, with the header
 /// `Wait-For-Revision` or with [`wait_for_written`](crate::wait_for_written),
-/// runs into the timeout. A projection that needs upcasters or a revision has
-/// a type of its own.
+/// runs into the timeout. A function that calls `seen` on its view sees only
+/// the events of the types it knows, so waiting for a revision may still run
+/// into the timeout. A projection that needs upcasters or a reliable revision
+/// has a type of its own.
 pub fn projection_fn<E, F, Fut, Err>(apply: F) -> ProjectionFn<E, F>
 where
     E: Projected,
