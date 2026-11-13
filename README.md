@@ -318,7 +318,7 @@ async fn book_by_id(
 
 A query is sent with the HTTP method `QUERY`, with the query as its body, and answered with what the view holds, or with 404 if it holds nothing. A caller that has just sent a command passes its revision in the header `Wait-For-Revision`, and the query waits until the view has seen it, for at most `DEFAULT_WAIT`, so that the caller reads what it has written. The answer names the revision of the view, and carries a tag, so that a caller that holds the answer already gets 304.
 
-A query that reads several items takes the stream that `View::all` hands out through the steps of the module `query`, such as `order_by`, `first`, `single`, and `try_count`, next to `try_filter`, `skip`, and `take` of the `futures` crate. With `?`, a query that `single` finds no item for is answered with 404 as well.
+A query that reads several items takes the stream that `View::all` hands out through the steps of the module `query`, such as `order_by`, `try_skip`, `first`, `single`, and `try_count`, next to `try_filter` and `take` of the `futures` crate. With `?`, a query that `single` finds no item for is answered with 404 as well.
 
 The router puts it all together, with the probes of an orchestrator such as Kubernetes, and an answer to a handler that panics:
 
