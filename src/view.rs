@@ -37,9 +37,10 @@ pub trait View<T>: Send + Sync {
     /// an error.
     ///
     /// The steps of a query come from `TryStreamExt` and `StreamExt` of the
-    /// `futures` crate, such as `try_filter`, `map_ok`, `skip`, `take` and
+    /// `futures` crate, such as `try_filter`, `map_ok`, `take` and
     /// `try_collect`, and from [`QueryExt`](crate::query::QueryExt), which
-    /// orders the items, and gets the first, the single one, or their number.
+    /// orders the items, passes over some of them for a page, and gets the
+    /// first, the single one, or their number.
     fn all(&self) -> impl Stream<Item = Result<T, Self::Error>> + Send;
 }
 
@@ -166,8 +167,8 @@ impl<K: ?Sized, T, V: KeyedView<K, T> + ?Sized> KeyedView<K, T> for Arc<V> {
 /// This is the stored shape, not the answer to a query. Turn the stream of
 /// [`View::all`] into whatever an answer needs, with `TryStreamExt` of the
 /// `futures` crate to filter and map the items, and with
-/// [`QueryExt`](crate::query::QueryExt) to order them, and to get the first,
-/// the single one, or their number.
+/// [`QueryExt`](crate::query::QueryExt) to order them, to pass over some of
+/// them for a page, and to get the first, the single one, or their number.
 pub struct InMemoryView<K, T> {
     shared: Arc<Shared<K, T>>,
 }

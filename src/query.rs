@@ -2,12 +2,16 @@
 //! crate brings along.
 //!
 //! [`View::all`](crate::View::all) hands out the items of a view as a stream,
-//! in which every element is an item or an error. Filtering, transforming, and
-//! paging come from `TryStreamExt` and `StreamExt` of the `futures` crate, such
-//! as `try_filter`, `map_ok`, `skip`, `take`, and `try_collect`, and so does
-//! `try_any`, which tells whether any item matches. [`QueryExt`] adds what those
-//! lack: ordering, and getting the first item, the single item, or the number
-//! of items.
+//! in which every element is an item or an error. Filtering and transforming
+//! come from `TryStreamExt` and `StreamExt` of the `futures` crate, such as
+//! `try_filter`, `map_ok`, `take`, and `try_collect`, and so does `try_any`,
+//! which tells whether any item matches. [`QueryExt`] adds what those lack:
+//! ordering, passing over items for a page, and getting the first item, the
+//! single item, or the number of items.
+//!
+//! Page with [`try_skip`](QueryExt::try_skip) rather than the `skip` of
+//! `StreamExt`, which counts an error as an element and drops it, so that a
+//! view that fails would answer with an empty page.
 //!
 //! ```
 //! use architecturekit::{InMemoryView, View, query::QueryExt};
@@ -20,7 +24,7 @@
 //!     .all()
 //!     .try_filter(|book| future::ready(!book.is_borrowed))
 //!     .order_by(|book| book.title.clone())
-//!     .skip(20)
+//!     .try_skip(20)
 //!     .take(10)
 //!     .try_collect()
 //!     .await
@@ -44,7 +48,11 @@ use std::{
     pin::pin,
 };
 
-use futures_util::{Stream, StreamExt, TryStreamExt, future::Either, stream};
+use futures_util::{
+    Stream, StreamExt, TryStreamExt,
+    future::{self, Either},
+    stream,
+};
 
 use crate::{Categorized, Category};
 
@@ -63,7 +71,7 @@ mod tests;
 /// `StreamExt` and `TryStreamExt` of the `futures` crate remain.
 pub trait QueryExt<T, E>: Stream<Item = Result<T, E>> + Sized {
     /// Sorts the items by a key, and hands them back as a stream, so that
-    /// `skip` and `take` can follow. The sort is stable, so items with equal
+    /// [`try_skip`](QueryExt::try_skip) and `take` can follow. The sort is stable, so items with equal
     /// keys keep their order, and the key is computed once per item.
     ///
     /// Sorting needs every item, so filter before it. The items are read once
@@ -127,6 +135,28 @@ pub trait QueryExt<T, E>: Stream<Item = Result<T, E>> + Sized {
         F: FnMut(&T, &T) -> Ordering + Send,
     {
         sorted(self, move |items| items.sort_by(compare))
+    }
+
+    /// Passes over the first items, as many as given, and hands out the rest,
+    /// such as for a page after [`order_by`](QueryExt::order_by) and before
+    /// `take`. An error among the items it passes over is handed on all the
+    /// same, since it is not an item, so that a view that fails is not taken
+    /// for one with fewer items.
+    ///
+    /// It is called `try_skip`, since the `skip` of `StreamExt` counts the
+    /// errors as well, and drops an error among the elements it passes over.
+    fn try_skip(self, count: usize) -> impl Stream<Item = Result<T, E>> + Send
+    where
+        Self: Send,
+        T: Send,
+        E: Send,
+    {
+        let mut remaining = count;
+        self.try_filter(move |_| {
+            let keep = remaining == 0;
+            remaining = remaining.saturating_sub(1);
+            future::ready(keep)
+        })
     }
 
     /// Returns the first item, or `None` if there is none. It reads no further
