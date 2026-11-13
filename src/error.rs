@@ -22,6 +22,9 @@ mod tests;
 ///   that leave no room for an event, mean that the request is wrong.
 /// - A view that has not caught up with a write tells that the write succeeded,
 ///   but its result is not visible yet.
+/// - A query that expected a single item, and found none or several, leaves it
+///   to the application what that means: whether a missing item is expected,
+///   and whether several are a mistake in the data or a race.
 /// - A run of a projection that stopped because its token was cancelled did
 ///   not fail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

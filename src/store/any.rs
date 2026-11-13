@@ -2,7 +2,7 @@ use std::{error::Error as StdError, fmt};
 
 use crate::{
     Categorized, Category, EmptyRange, Failure, Permanent, PreconditionsError, ReadOptionsError,
-    Transient,
+    Transient, ViewError,
 };
 
 use super::error::{
@@ -10,14 +10,19 @@ use super::error::{
     source_of_outcome_unknown,
 };
 
+#[cfg(test)]
+mod tests;
+
 /// Any failure of architecturekit, where `D` is the error of a decider, so that
 /// a function that calls several operations can pass their failures on with
 /// `?`.
 ///
-/// Every error of an operation turns into it. It holds all the cases of those,
-/// so a `match` on it needs a catch-all arm, and new cases may come with new
-/// operations. Where the cases of a single operation matter, match on its own
-/// error before it turns into this one.
+/// Every error of an operation turns into it, and so do a [`Permanent`] or a
+/// [`Transient`] failure on its own, such as the one of
+/// [`decode`](crate::decode), and a [`ViewError`]. It holds all the cases of
+/// those, so a `match` on it needs a catch-all arm, and new cases may come with
+/// new operations. Where the cases of a single operation matter, match on its
+/// own error before it turns into this one.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error<D> {
@@ -84,6 +89,26 @@ impl<D> From<ReadOptionsError> for Error<D> {
 impl<D> From<PreconditionsError> for Error<D> {
     fn from(refusal: PreconditionsError) -> Self {
         ExecuteError::from(refusal).into()
+    }
+}
+
+impl<D> From<Permanent> for Error<D> {
+    fn from(failure: Permanent) -> Self {
+        Self::Permanent(failure)
+    }
+}
+
+impl<D> From<Transient> for Error<D> {
+    fn from(failure: Transient) -> Self {
+        Self::Transient(failure)
+    }
+}
+
+impl<D> From<ViewError> for Error<D> {
+    fn from(failure: ViewError) -> Self {
+        match failure {
+            ViewError::Permanent(failure) => Self::Permanent(failure),
+        }
     }
 }
 
