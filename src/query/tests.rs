@@ -381,6 +381,44 @@ mod try_count {
     }
 }
 
+mod try_skip {
+    use super::*;
+
+    #[tokio::test]
+    async fn passes_over_the_first_items() {
+        let rest: Result<Vec<Book>, Broken> =
+            books(vec![Ok(book("a", 1)), Ok(book("b", 2)), Ok(book("c", 3))])
+                .try_skip(2)
+                .try_collect()
+                .await;
+
+        assert_eq!(rest, Ok(vec![book("c", 3)]));
+    }
+
+    #[tokio::test]
+    async fn hands_on_an_error_among_the_items_it_passes_over() {
+        let failure: Result<Vec<Book>, Broken> =
+            books(vec![Ok(book("a", 1)), Err(Broken), Ok(book("c", 3))])
+                .try_skip(2)
+                .try_collect()
+                .await;
+
+        assert_eq!(failure, Err(Broken));
+    }
+
+    #[tokio::test]
+    async fn hands_on_the_error_of_an_ordered_view_rather_than_an_empty_page() {
+        let failure: Result<Vec<Book>, Broken> = books(vec![Ok(book("b", 1)), Err(Broken)])
+            .order_by(|book| book.title)
+            .try_skip(20)
+            .take(10)
+            .try_collect()
+            .await;
+
+        assert_eq!(failure, Err(Broken));
+    }
+}
+
 mod steps {
     use super::*;
 
