@@ -145,9 +145,10 @@ pub trait QueryExt<T, E>: Stream<Item = Result<T, E>> + Sized {
     /// can only be called the single one once the stream has ended. An error
     /// after a second item goes unnoticed, since there are too many either way.
     ///
-    /// With the feature `http`, `?` answers a missing item with 404, and too
-    /// many with 500, since a query that expects one item and finds several is
-    /// a mistake of the program.
+    /// With the feature `http`, `?` answers a missing item with 404, and
+    /// several with 500, logged as an error, since the caller can not fix
+    /// them. Whether several items are a mistake in the data or a race, only
+    /// the application knows.
     fn single(self) -> impl Future<Output = Result<T, SingleError<E>>> + Send
     where
         Self: Send,
@@ -249,13 +250,17 @@ impl<E: Error + 'static> Error for SingleError<E> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::NoItems | Self::TooManyItems => None,
-            Self::View(error) => Some(error),
+            // The text names the error of the view already, so this passes on
+            // its source.
+            Self::View(error) => error.source(),
         }
     }
 }
 
-/// Takes the category of the error of the view. A missing item and too many
-/// items belong to none, since only the query knows whether they are expected.
+/// Takes the category of the error of the view. A missing item and several
+/// items belong to none, since only the application knows what they mean:
+/// whether a missing item is expected, and whether several are a mistake in
+/// the data or a race.
 impl<E: Categorized> Categorized for SingleError<E> {
     fn category(&self) -> Option<Category> {
         match self {

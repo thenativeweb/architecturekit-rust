@@ -6,8 +6,8 @@ use http::{Response, StatusCode};
 use super::answer::json;
 use crate::{
     Categorized, Category, EmptyRange, ExecuteError, LoadError, NotARevision, NotASubject,
-    PreconditionsError, ReadError, ReadOptionsError, RegisterSchemasError, SubjectValuesError,
-    Transient, WriteError, query::SingleError,
+    Permanent, PreconditionsError, ReadError, ReadOptionsError, RegisterSchemasError,
+    SubjectValuesError, Transient, ViewError, WriteError, query::SingleError,
 };
 
 #[cfg(test)]
@@ -28,29 +28,33 @@ enum Logged {
 }
 
 /// A failure of a request, with the status and the message it is answered
-/// with. Every error of the kit turns into it with `?`, and so does every
-/// other error through [`HttpError::of`], by its category.
+/// with. Every error of the kit turns into it with `?`, except
+/// [`DomainError`](crate::DomainError),
+/// [`ProjectionError`](crate::ProjectionError),
+/// [`CaughtUpError`](crate::CaughtUpError), and
+/// [`NotCaughtUp`](crate::NotCaughtUp) (see below), and every other error
+/// through [`HttpError::of`], by its category.
 ///
 /// A failure the caller can fix, such as a broken business rule or a malformed
 /// request, is answered with its own text, and not logged. Any other failure
 /// may name internals, so it is answered with a fixed text, and its cause is
-/// logged: a refusal with 401 or 409 as information, since the server did not
-/// fail, and a failure of the server, with 500 or 503, as an error.
+/// logged: a refusal, with 401, 404, or 409, as information, since the server
+/// did not fail, and a failure of the server, with 500 or 503, as an error.
 ///
-/// | Failure | Status | Message |
-/// |---|---|---|
-/// | [`unauthorized`](HttpError::unauthorized) | 401 | `unauthorized` |
-/// | [`forbidden`](HttpError::forbidden) | 403 | `forbidden: …` |
-/// | [`not_found`](HttpError::not_found) | 404 | `not found: …` |
-/// | no item for [`single`](crate::query::QueryExt::single) | 404 | `not found` |
-/// | [`malformed`](HttpError::malformed), a value that is not a revision or not a subject, values that can not compose a subject, an empty range | 400 | its own |
-/// | [`too_large`](HttpError::too_large) | 413 | `request body too large: …` |
-/// | [`unsupported_media_type`](HttpError::unsupported_media_type) | 415 | `unsupported media type: …` |
-/// | a failure of the category [`Category::Domain`] | 422 | its own |
-/// | [`Transient::Conflict`] | 409 | `conflict: the data has changed since it was read` |
-/// | a failure of the category [`Category::Transient`] | 503 | `internal server error` |
-/// | an unknown outcome of a write | 500 | `outcome unknown: the request may have succeeded` |
-/// | any other failure | 500 | `internal server error` |
+/// | Failure | Status | Message | Logged |
+/// |---|---|---|---|
+/// | [`unauthorized`](HttpError::unauthorized) | 401 | `unauthorized` | as information |
+/// | [`forbidden`](HttpError::forbidden) | 403 | `forbidden: …` | no |
+/// | [`not_found`](HttpError::not_found) | 404 | `not found: …` | no |
+/// | no item for [`single`](crate::query::QueryExt::single) | 404 | `not found` | as information |
+/// | [`malformed`](HttpError::malformed), a value that is not a revision or not a subject, values that can not compose a subject, an empty range | 400 | its own | no |
+/// | [`too_large`](HttpError::too_large) | 413 | `request body too large: …` | no |
+/// | [`unsupported_media_type`](HttpError::unsupported_media_type) | 415 | `unsupported media type: …` | no |
+/// | a failure of the category [`Category::Domain`] | 422 | its own | no |
+/// | [`Transient::Conflict`] | 409 | `conflict: the data has changed since it was read` | as information |
+/// | a failure of the category [`Category::Transient`] | 503 | `internal server error` | as an error |
+/// | an unknown outcome of a write | 500 | `outcome unknown: the request may have succeeded` | as an error |
+/// | any other failure | 500 | `internal server error` | as an error |
 ///
 /// The answer is JSON, such as `{"message":"unauthorized"}`, and it is never
 /// cached. A write whose outcome is unknown keeps 500, so that a caller does
@@ -122,6 +126,11 @@ impl HttpError {
     /// [`Category::Transient`] with 503, and any other with 500, both with a
     /// fixed text. Use it for an error of your own, such as the one of a view
     /// in a database.
+    ///
+    /// For an error of the kit, use `?` or `into` instead, since `of` knows
+    /// only its category: it would answer a missing item
+    /// ([`SingleError::NoItems`]) with 500 instead of 404, and a value that is
+    /// not a revision with 500 instead of 400.
     pub fn of<E: Error + Categorized + Send + Sync + 'static>(error: E) -> Self {
         match error.category() {
             Some(Category::Domain) => {
@@ -311,7 +320,10 @@ through_the_failure_of_the_kit!(
     RegisterSchemasError,
     ReadError,
     ReadOptionsError,
-    PreconditionsError
+    PreconditionsError,
+    Permanent,
+    Transient,
+    ViewError
 );
 
 /// Answers a value that is not a revision with 400 and its own text, since it
@@ -350,16 +362,20 @@ impl From<EmptyRange> for HttpError {
 /// Answers the failure of a query that expected a single item: no item with
 /// 404 and the fixed text `not found`, since nothing says what was not found,
 /// logged as information; several items with 500 and a fixed text, logged as
-/// an error, since a query that expects one item and finds several is a
-/// mistake of the program; and a failure of the view by its category, as
-/// [`HttpError::of`] does.
+/// an error, since the caller can not fix them, whether they are a mistake in
+/// the data or a race, which only the application knows; and a failure of the
+/// view by its category, as [`HttpError::of`] does.
 impl<E: Error + Categorized + Send + Sync + 'static> From<SingleError<E>> for HttpError {
     fn from(error: SingleError<E>) -> Self {
         match error {
             refusal @ SingleError::NoItems => {
                 Self::refused(StatusCode::NOT_FOUND, "not found", Box::new(refusal))
             }
-            mistake @ SingleError::TooManyItems => Self::internal(mistake),
+            several @ SingleError::TooManyItems => Self::failed(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error",
+                Box::new(several),
+            ),
             SingleError::View(failure) => Self::of(failure),
         }
     }
