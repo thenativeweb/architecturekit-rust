@@ -1,7 +1,6 @@
 use std::{
     any::Any,
     env,
-    error::Error,
     future::{self, Future},
     panic::{self, AssertUnwindSafe},
     sync::Once,
@@ -12,6 +11,7 @@ use eventsourcingdb::{Client, container::Container};
 use tokio::sync::SetOnce;
 use url::Url;
 
+use super::chain;
 use crate::{EventSchema, Store, StoreBuilder};
 
 mod reaper;
@@ -346,18 +346,6 @@ fn text_of(panic: &(dyn Any + Send)) -> &str {
         .map(String::as_str)
         .or_else(|| panic.downcast_ref::<&str>().copied())
         .unwrap_or("a value that is no text")
-}
-
-/// Returns the message of an error together with those of its causes.
-fn chain(error: &dyn Error) -> String {
-    let mut messages = vec![error.to_string()];
-    let mut source = error.source();
-    while let Some(cause) = source {
-        messages.push(cause.to_string());
-        source = cause.source();
-    }
-
-    messages.join(": ")
 }
 
 /// Starts the reaper and the container of the shared database, and hands the

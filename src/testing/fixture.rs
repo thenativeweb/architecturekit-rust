@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::fmt;
 
 use serde_json::Value;
 
@@ -6,6 +6,8 @@ use crate::{
     Categorized, Category, Command, Decider, Events, ExecuteError, Precondition, State, Subject,
     UpcastEvent, check_preconditions, replay, replay_stored, store::unencodable,
 };
+
+use super::chain;
 
 #[cfg(test)]
 mod tests;
@@ -474,16 +476,4 @@ fn describe_failure<D: fmt::Debug>(failure: &ExecuteError<D>) -> String {
             format!("outcome unknown: {}", failure.message())
         }
     }
-}
-
-/// Returns the message of an error together with those of its causes.
-fn chain(error: &dyn Error) -> String {
-    let mut messages = vec![error.to_string()];
-    let mut source = error.source();
-    while let Some(cause) = source {
-        messages.push(cause.to_string());
-        source = cause.source();
-    }
-
-    messages.join(": ")
 }
