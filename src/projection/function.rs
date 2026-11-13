@@ -23,9 +23,12 @@ mod tests;
 /// ```
 ///
 /// A function brings along neither upcasters nor a record of what it has seen
-/// (see [`Projection::upcasters`] and [`Projection::seen`]). A projection that
-/// needs either has a type of its own.
-pub fn projection_fn<E, F, Fut, Err>(apply: F) -> ProjectionFn<F, E>
+/// (see [`Projection::upcasters`] and [`Projection::seen`]). So a view that it
+/// fills never reaches a revision, and waiting for one, with the header
+/// `Wait-For-Revision` or with [`wait_for_written`](crate::wait_for_written),
+/// runs into the timeout. A projection that needs upcasters or a revision has
+/// a type of its own.
+pub fn projection_fn<E, F, Fut, Err>(apply: F) -> ProjectionFn<E, F>
 where
     E: Projected,
     F: Fn(Envelope<E>) -> Fut + Send + Sync + 'static,
@@ -33,18 +36,18 @@ where
     Err: Error + Categorized + Send + Sync + 'static,
 {
     ProjectionFn {
-        apply,
         events: PhantomData,
+        apply,
     }
 }
 
 /// A function that [`projection_fn`] has turned into a [`Projection`].
-pub struct ProjectionFn<F, E> {
-    apply: F,
+pub struct ProjectionFn<E, F> {
     events: PhantomData<fn() -> E>,
+    apply: F,
 }
 
-impl<F, E> fmt::Debug for ProjectionFn<F, E> {
+impl<E, F> fmt::Debug for ProjectionFn<E, F> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ProjectionFn")
@@ -52,7 +55,7 @@ impl<F, E> fmt::Debug for ProjectionFn<F, E> {
     }
 }
 
-impl<F, E, Fut, Err> Projection for ProjectionFn<F, E>
+impl<E, F, Fut, Err> Projection for ProjectionFn<E, F>
 where
     E: Projected,
     F: Fn(Envelope<E>) -> Fut + Send + Sync + 'static,

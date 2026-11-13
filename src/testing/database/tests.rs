@@ -4,9 +4,13 @@
 //
 // They also check the shared database: the tests of a program get the same
 // one, it outlives the runtime that started it, and the reaper removes it once
-// the program has ended, which a second run of this program shows.
+// the program has ended, which a second run of this program shows. It starts
+// at most once, also if the first caller stops waiting, and a failed start
+// fails every caller with the same message.
 
 use std::{
+    error::Error,
+    fmt, io,
     panic::AssertUnwindSafe,
     pin::pin,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -16,8 +20,9 @@ use std::{
 use eventsourcingdb::Client;
 use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 
-use super::{Database, store, store_with};
+use super::{Database, Failure, StartedOnce, store, store_with};
 use crate::{Event, EventOn, EventSchema, Events, Precondition, State, Subject};
 
 #[derive(Debug, Serialize, Deserialize, Event)]
@@ -82,7 +87,7 @@ async fn registers_the_schemas() {
 
     // Only all event types are read, as the store reads them, since reading a
     // single one can make EventSourcingDB 1.2.0 stop answering writes.
-    let client = database.client().await;
+    let client = database.client();
     let event_types = client
         .read_event_types()
         .await
@@ -110,7 +115,6 @@ async fn fails_the_test_for_a_schema_the_database_refuses() {
     // differs, is refused.
     let _ = database
         .client()
-        .await
         .register_event_schema(
             EntryWritten::EVENT_TYPE,
             &serde_json::json!({ "type": "object", "properties": {} }),
@@ -162,7 +166,7 @@ async fn is_a_database_of_the_test_s_own_which_is_stopped_once_dropped() {
         "a database does not see the events of another one"
     );
 
-    let client = first.client().await;
+    let client = first.client();
     drop(first);
     assert!(
         client.ping().await.is_err(),
@@ -227,7 +231,6 @@ async fn shares_one_database_between_the_tests_of_a_program() {
     );
     first
         .client()
-        .await
         .verify_api_token()
         .await
         .expect("the shared database answers");
@@ -251,11 +254,114 @@ fn keeps_the_shared_database_beyond_the_runtime_that_started_it() {
         assert_eq!(database.url(), &url);
         database
             .client()
-            .await
             .verify_api_token()
             .await
             .expect("the shared database still answers");
     });
+}
+
+// The shared database is a static that every test of the program may ask for
+// first, so the way it starts once is checked with a start of its own, which
+// waits for the test, and needs no Docker.
+
+#[tokio::test]
+async fn starts_once_and_hands_the_outcome_to_a_caller_after_one_that_stopped_waiting() {
+    static STARTED: StartedOnce<u32> = StartedOnce::new("architecturekit-test-started-once");
+    static STARTS: AtomicUsize = AtomicUsize::new(0);
+
+    let (release, released) = oneshot::channel::<()>();
+    let first = STARTED.get(move || async move {
+        let _ = STARTS.fetch_add(1, Ordering::SeqCst);
+        released.await.expect("the test releases the start");
+        Ok((42, ()))
+    });
+    assert!(
+        first.now_or_never().is_none(),
+        "the start waits for the test, so the first caller stops waiting before it ends"
+    );
+    release
+        .send(())
+        .expect("the start is still there, although nobody waits for it");
+
+    let second = STARTED
+        .get(|| async {
+            let _ = STARTS.fetch_add(1, Ordering::SeqCst);
+            Ok((23, ()))
+        })
+        .await;
+
+    assert_eq!(
+        second,
+        Ok(&42),
+        "the later caller gets what the first start brought"
+    );
+    assert_eq!(STARTS.load(Ordering::SeqCst), 1, "it starts only once");
+}
+
+/// A failure to start a container, with its cause.
+#[derive(Debug)]
+struct NotStarted(io::Error);
+
+impl fmt::Display for NotStarted {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("starting the container")
+    }
+}
+
+impl Error for NotStarted {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+#[tokio::test]
+async fn fails_every_caller_with_the_same_failure_and_its_causes_once_starting_has_failed() {
+    static STARTED: StartedOnce<u32> = StartedOnce::new("architecturekit-test-started-once");
+    static STARTS: AtomicUsize = AtomicUsize::new(0);
+
+    let first = STARTED
+        .get(|| async {
+            let _ = STARTS.fetch_add(1, Ordering::SeqCst);
+            Err::<(u32, ()), Failure>(Box::new(NotStarted(io::Error::other(
+                "Docker is not running",
+            ))))
+        })
+        .await;
+    let second = STARTED
+        .get(|| async {
+            let _ = STARTS.fetch_add(1, Ordering::SeqCst);
+            Ok((23, ()))
+        })
+        .await;
+
+    assert_eq!(
+        first,
+        Err("starting the container: Docker is not running".to_owned())
+    );
+    assert_eq!(second, first, "a later caller gets the same failure");
+    assert_eq!(
+        STARTS.load(Ordering::SeqCst),
+        1,
+        "a failed start is not tried again"
+    );
+}
+
+#[tokio::test]
+async fn fails_every_caller_if_the_start_panics() {
+    static STARTED: StartedOnce<u32> = StartedOnce::new("architecturekit-test-started-once");
+
+    let first = STARTED
+        .get::<(), _>(|| async { panic!("the image is broken") })
+        .await;
+    let second = STARTED.get(|| async { Ok((23, ())) }).await;
+
+    assert_eq!(
+        first,
+        Err(
+            "the thread architecturekit-test-started-once panicked: the image is broken".to_owned()
+        )
+    );
+    assert_eq!(second, first, "a later caller gets the same failure");
 }
 
 #[tokio::test]

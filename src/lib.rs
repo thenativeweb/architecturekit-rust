@@ -14,14 +14,14 @@
 //! cargo add tokio --features macros,rt-multi-thread
 //! ```
 //!
-//! architecturekit brings the client SDK for EventSourcingDB along as `architecturekit::eventsourcingdb`, and `ed25519_dalek` for verifying signatures as `architecturekit::ed25519_dalek`, so that their versions always fit. A new major version of the client SDK comes with a new major version of architecturekit.
+//! architecturekit brings the client SDK for EventSourcingDB along as `architecturekit::eventsourcingdb`, and `ed25519_dalek` for verifying signatures as `architecturekit::ed25519_dalek`, so that their versions always fit. A new major version of the client SDK comes with a new major version of architecturekit. It does not bring `serde` and `serde_json` along, so an application depends on `serde` itself for its derives, and on `serde_json` as soon as it handles the data of an event as a `serde_json::Value`, as an upcaster does.
 //!
 //! architecturekit needs Rust 1.88 or later. Its features are:
 //!
 //! - `derive`, which is on by default, derives events, their enums, and their schemas.
 //! - `http` answers commands and queries over HTTP, with the types of the `http` crate.
 //! - `axum` adds extractors and handlers for axum 0.8, and turns on `http`.
-//! - `pem` reads the key that the signatures of events are verified with from a PEM file.
+//! - `pem` turns on `pem` of `ed25519-dalek`, so that the key that the signatures of events are verified with can be read from a PEM file through the re-exported crate, with `VerifyingKey::from_public_key_pem` of the trait `pkcs8::DecodePublicKey`.
 //! - `testing` adds helpers to test deciders and projections.
 //! - `testcontainers` adds an EventSourcingDB in a container, which the tests of a program share or a test has of its own, and turns on `testing`.
 //!

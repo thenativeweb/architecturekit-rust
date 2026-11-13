@@ -353,7 +353,7 @@ async fn returns_at_once_if_the_view_has_seen_the_events_already() {
         assert!(
             matches!(
                 wait_for_written(
-                    &*view_at(revision),
+                    &view_at(revision),
                     &written(&["5"]),
                     Duration::from_secs(3600)
                 )
@@ -367,7 +367,7 @@ async fn returns_at_once_if_the_view_has_seen_the_events_already() {
 
 #[tokio::test]
 async fn returns_although_the_time_has_run_out_if_the_view_has_seen_the_events_already() {
-    let waited = wait_for_written(&*view_at(5), &written(&["5"]), Duration::from_nanos(1)).await;
+    let waited = wait_for_written(&view_at(5), &written(&["5"]), Duration::from_nanos(1)).await;
 
     assert!(matches!(waited, Ok(())), "{waited:?}");
 }
@@ -399,7 +399,7 @@ async fn returns_once_the_view_has_caught_up() {
         })
     };
 
-    let waited = wait_for_written(&*view, &written(&["5"]), Duration::from_secs(5)).await;
+    let waited = wait_for_written(&view, &written(&["5"]), Duration::from_secs(5)).await;
 
     assert!(matches!(waited, Ok(())), "{waited:?}");
     catching_up.await.expect("the view catches up");
@@ -428,7 +428,7 @@ async fn returns_without_waiting_if_no_events_were_written() {
 async fn fails_with_not_caught_up_if_the_view_does_not_catch_up_in_time() {
     let started = Instant::now();
 
-    let waited = wait_for_written(&*view_at(4), &written(&["5"]), Duration::from_millis(50)).await;
+    let waited = wait_for_written(&view_at(4), &written(&["5"]), Duration::from_millis(50)).await;
 
     let Err(failure @ NotCaughtUp::TimedOut(timeout)) = waited else {
         panic!("the view has not caught up: {waited:?}");
@@ -448,7 +448,7 @@ async fn fails_with_not_caught_up_if_the_view_does_not_catch_up_in_time() {
 #[tokio::test]
 async fn belongs_to_no_category_if_the_view_does_not_catch_up_in_time_since_the_write_has_succeeded()
  {
-    let waited = wait_for_written(&*view_at(4), &written(&["5"]), Duration::from_millis(20)).await;
+    let waited = wait_for_written(&view_at(4), &written(&["5"]), Duration::from_millis(20)).await;
 
     let failure = waited.expect_err("the view has not caught up");
     assert_eq!(
@@ -460,8 +460,7 @@ async fn belongs_to_no_category_if_the_view_does_not_catch_up_in_time_since_the_
 
 #[tokio::test]
 async fn names_the_timeout_the_way_a_duration_prints() {
-    let waited =
-        wait_for_written(&*view_at(4), &written(&["5"]), Duration::from_micros(1500)).await;
+    let waited = wait_for_written(&view_at(4), &written(&["5"]), Duration::from_micros(1500)).await;
 
     assert_eq!(
         waited.expect_err("the view has not caught up").to_string(),
@@ -548,5 +547,5 @@ async fn fails_with_not_caught_up_that_wraps_an_error_of_the_view_that_looks_lik
     expected = "architecturekit: wait_for_written needs a timeout that is positive, not 0ns"
 )]
 async fn panics_for_a_timeout_that_is_not_positive_before_it_looks_at_the_events() {
-    let _ = wait_for_written(&*view_at(5), &[], Duration::ZERO).await;
+    let _ = wait_for_written(&view_at(5), &[], Duration::ZERO).await;
 }
