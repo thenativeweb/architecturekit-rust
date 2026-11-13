@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
-    Event, EventSchema, Events, State, UpcastEvent, replay, replay_stored, step, step_stored,
+    Event, EventSchema, Events, State, projection::tests::stored, replay, replay_stored, step,
+    step_stored,
 };
 
 #[derive(Serialize, Deserialize, Event)]
@@ -159,7 +160,8 @@ fn fails_on_an_event_that_does_not_survive_being_written_and_read_back() {
 
 #[test]
 fn fails_on_data_that_does_not_match_the_rule() {
-    let failure = replay_stored::<Counter>([UpcastEvent::new(
+    let failure = replay_stored::<Counter>([stored(
+        "0",
         Incremented::EVENT_TYPE,
         json!({ "by": "three" }),
     )])
@@ -170,15 +172,27 @@ fn fails_on_data_that_does_not_match_the_rule() {
 
 #[test]
 fn fails_on_an_event_without_rule() {
-    let failure = replay_stored::<Counter>([UpcastEvent::new(
-        "io.thenativeweb.test.unheard-of",
-        json!({}),
-    )])
-    .expect_err("the state has no rule for it");
+    let failure =
+        replay_stored::<Counter>([stored("0", "io.thenativeweb.test.unheard-of", json!({}))])
+            .expect_err("the state has no rule for it");
 
     assert_eq!(
         failure.to_string(),
         r#"permanent failure: no rule for event type "io.thenativeweb.test.unheard-of""#,
+    );
+}
+
+#[test]
+fn fails_on_a_stored_event_whose_id_is_not_a_revision() {
+    let failure = replay_stored::<Counter>([
+        stored("0", Incremented::EVENT_TYPE, json!({ "by": 1 })),
+        stored("x", Incremented::EVENT_TYPE, json!({ "by": 2 })),
+    ])
+    .expect_err("the database never writes such an ID");
+
+    assert_eq!(
+        failure.to_string(),
+        r#"permanent failure: event "x" on "/books/42" has an ID that is not a revision"#,
     );
 }
 
@@ -305,11 +319,11 @@ fn starts_stored_events_from_the_latest_event_of_that_type() {
     // The state has no rule for the first event, so replaying it would fail.
     // Starting from the latest reset skips it.
     let counter: CounterFromLatest = replay_stored([
-        UpcastEvent::new("io.thenativeweb.test.unheard-of", json!({})),
-        UpcastEvent::new(Reset::EVENT_TYPE, json!({})),
-        UpcastEvent::new(Incremented::EVENT_TYPE, json!({ "by": 2 })),
-        UpcastEvent::new(Reset::EVENT_TYPE, json!({})),
-        UpcastEvent::new(Incremented::EVENT_TYPE, json!({ "by": 5 })),
+        stored("0", "io.thenativeweb.test.unheard-of", json!({})),
+        stored("1", Reset::EVENT_TYPE, json!({})),
+        stored("2", Incremented::EVENT_TYPE, json!({ "by": 2 })),
+        stored("3", Reset::EVENT_TYPE, json!({})),
+        stored("4", Incremented::EVENT_TYPE, json!({ "by": 5 })),
     ])
     .expect("the history replays");
 
@@ -322,10 +336,10 @@ fn starts_from_the_latest_event_of_that_type_not_from_the_first() {
     // would yield the same total. An event the state can not read between the
     // two resets tells them apart: only starting from the latest skips it.
     let counter: CounterFromLatest = replay_stored([
-        UpcastEvent::new(Reset::EVENT_TYPE, json!({})),
-        UpcastEvent::new("io.thenativeweb.test.unheard-of", json!({})),
-        UpcastEvent::new(Reset::EVENT_TYPE, json!({})),
-        UpcastEvent::new(Incremented::EVENT_TYPE, json!({ "by": 5 })),
+        stored("0", Reset::EVENT_TYPE, json!({})),
+        stored("1", "io.thenativeweb.test.unheard-of", json!({})),
+        stored("2", Reset::EVENT_TYPE, json!({})),
+        stored("3", Incremented::EVENT_TYPE, json!({ "by": 5 })),
     ])
     .expect("the history replays from the latest reset");
 
@@ -344,7 +358,7 @@ fn panics_for_a_state_that_starts_from_an_event_type_without_rule() {
 fn steps_a_stored_event() {
     let after = step_stored(
         &Counter { total: 1 },
-        &crate::projection::tests::stored("0", Incremented::EVENT_TYPE, json!({ "by": 2 })),
+        &stored("0", Incremented::EVENT_TYPE, json!({ "by": 2 })),
     )
     .expect("the event steps");
 

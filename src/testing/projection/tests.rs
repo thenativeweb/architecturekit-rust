@@ -1,11 +1,13 @@
 // These tests check StoredEvent, stored_events, stored_events_at, project, and
-// project_transactional. A projection is transactional by its trait, so
-// project can not be handed one. Since project returns its failure rather than
-// failing the test, the tests check the failure.
+// project_transactional, and a projection that steps a state, as the example
+// of step_stored does. A projection is transactional by its trait, so project
+// can not be handed one. Since project returns its failure rather than failing
+// the test, the tests check the failure.
 
 use std::{
+    collections::HashMap,
     error::Error,
-    fmt,
+    fmt, future,
     panic::AssertUnwindSafe,
     sync::{Arc, LazyLock, Mutex},
 };
@@ -17,8 +19,8 @@ use serde_json::json;
 
 use crate::{
     Categorized, Category, Envelope, Event, Events, Failure, InMemoryView, Permanent, Projection,
-    ProjectionError, Revision, Subject, Transaction, TransactionalProjection, UpcastEvent,
-    Upcasters, View, ViewError,
+    ProjectionError, Revision, State, Subject, SubjectScheme, Transaction, TransactionalProjection,
+    UpcastEvent, Upcasters, View, ViewError, projection_fn, step_stored,
     testing::{
         StoredEvent, expect_items, items_of, project, project_transactional, stored_events,
         stored_events_at,
@@ -202,6 +204,28 @@ fn carries_what_a_database_would() {
         event.datacontenttype(),
         "application/json",
         "the stored shape has to look complete"
+    );
+}
+
+#[test]
+fn carries_an_older_shape_as_a_database_would() {
+    // The older type has no Rust type any more, so only its type and its data
+    // can describe it.
+    let stored = StoredEvent::raw(
+        Subject::new("/account/1"),
+        7,
+        "test.account.opened.v1",
+        json!({ "whatever": true }),
+    );
+
+    assert_eq!(
+        stored,
+        StoredEvent {
+            event_type: "test.account.opened.v1".to_owned(),
+            data: json!({ "whatever": true }),
+            ..StoredEvent::new(Subject::new("/account/1"), 7, &opened("golo"))
+        },
+        "everything but the type and the data is as for a typed event"
     );
 }
 
@@ -457,6 +481,74 @@ async fn takes_the_way_of_a_run() {
 
     assert_eq!(all_of(&owners.view).await, ["golo", "jane"]);
     assert_eq!(owners.seen(), [Revision::from(1), Revision::from(2)]);
+}
+
+/// The state of an account, which a projection of stored events steps.
+#[derive(Clone, Debug, Default)]
+struct Account {
+    owner: String,
+}
+
+impl State for Account {
+    type Event = Opening;
+
+    fn evolve(self, event: &Opening) -> Self {
+        let Opening::Opened(opened) = event;
+        Account {
+            owner: opened.owner.clone(),
+        }
+    }
+}
+
+static ACCOUNTS: LazyLock<SubjectScheme> =
+    LazyLock::new(|| SubjectScheme::new("/account/{account}"));
+
+#[tokio::test]
+async fn steps_only_the_events_of_the_subjects_of_a_state() {
+    // A projection of stored events gets the events of every subject, among
+    // them events of types the state has no rule for, which would make
+    // stepping fail. So it steps only the events of the subjects of the state,
+    // as the example of step_stored does.
+    let accounts: Arc<Mutex<HashMap<String, Account>>> = Arc::default();
+    let projection = projection_fn({
+        let accounts = Arc::clone(&accounts);
+        move |event: Envelope<eventsourcingdb::Event>| {
+            let Some(account) = ACCOUNTS.value(&event.subject, "account") else {
+                return future::ready(Ok(()));
+            };
+
+            let mut accounts = accounts.lock().expect("not poisoned");
+            let before = accounts.get(account).cloned().unwrap_or_default();
+            let after = step_stored(&before, &event.data).map(|after| {
+                let _ = accounts.insert(account.to_owned(), after);
+            });
+
+            future::ready(after)
+        }
+    });
+
+    project(
+        &projection,
+        &[
+            StoredEvent::new(Subject::new("/account/1"), 0, &opened("golo")),
+            StoredEvent::raw(
+                Subject::new("/owner/7"),
+                1,
+                "test.owner.registered",
+                json!({}),
+            ),
+            StoredEvent::new(Subject::new("/account/2"), 2, &opened("jane")),
+        ],
+    )
+    .await
+    .expect("the events are applied");
+
+    let accounts = accounts.lock().expect("not poisoned");
+    let owners: HashMap<&str, &str> = accounts
+        .iter()
+        .map(|(account, state)| (account.as_str(), state.owner.as_str()))
+        .collect();
+    assert_eq!(owners, HashMap::from([("1", "golo"), ("2", "jane")]));
 }
 
 /// What a transaction writes down that happens to it, shared with the

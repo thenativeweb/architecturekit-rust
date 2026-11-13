@@ -5,8 +5,8 @@
 //! The kit offers building blocks rather than routes: every route is an
 //! ordinary handler of the web framework, which determines its user with an
 //! extractor of its own, and answers with what the kit answers. A failure is
-//! an [`HttpError`], which every error of the kit turns into, and which
-//! answers it with a status and a message by its category.
+//! an [`HttpError`], which nearly every error of the kit turns into with `?`,
+//! and which answers it with a status and a message by its category.
 
 mod answer;
 mod body;

@@ -99,9 +99,11 @@ mod tests;
 /// as a string.
 ///
 /// A type that derives its schema can say more than its fields do with
-/// `#[schema(with = "...")]`, which names a function that gets the derived
-/// schema and returns the one to use, as `schema_with` does for an
-/// [`Event`](crate::Event):
+/// `#[architecturekit(schema_with = "...")]`, which names a function that gets
+/// the derived schema and returns the one to use, as `schema_with` does in
+/// `#[event(...)]` for an [`Event`](crate::Event). The attribute is named after
+/// the kit, so that it does not collide with the `schema` attribute of other
+/// derives, such as `ToSchema` of utoipa:
 ///
 /// ```
 /// use architecturekit::Schema;
@@ -109,7 +111,7 @@ mod tests;
 /// use serde_json::{Value, json};
 ///
 /// #[derive(Serialize, Deserialize, Schema)]
-/// #[schema(with = "with_a_short_city")]
+/// #[architecturekit(schema_with = "with_a_short_city")]
 /// struct Address {
 ///     city: String,
 /// }
