@@ -2,9 +2,12 @@ use std::{
     any::Any,
     env,
     future::{self, Future},
+    hash::{BuildHasher, RandomState},
     panic::{self, AssertUnwindSafe},
-    sync::Once,
+    process,
+    sync::{LazyLock, Once},
     thread,
+    time::SystemTime,
 };
 
 use eventsourcingdb::{Client, container::Container};
@@ -18,7 +21,7 @@ mod reaper;
 #[cfg(test)]
 mod tests;
 
-use reaper::{Failure, Reaper};
+use reaper::{Failure, Reaper, SESSION_LABEL};
 
 /// The environment variable that chooses the tag of the image the container
 /// runs, as it does for the tests of the client SDK.
@@ -27,6 +30,11 @@ const IMAGE_TAG_VARIABLE: &str = "EVENTSOURCINGDB_IMAGE_TAG";
 /// The database that the tests of a program share, once one of them has asked
 /// for it, or why it could not be started.
 static SHARED: StartedOnce<Database> = StartedOnce::new("architecturekit-shared-database");
+
+/// The session of the program, which no other program shares. The containers
+/// of its databases carry it as a label, by which the reaper removes them once
+/// the program has ended.
+static SESSION: LazyLock<String> = LazyLock::new(new_session);
 
 /// An EventSourcingDB in a container, for the tests that need a real one. It
 /// needs the feature `testcontainers`.
@@ -80,11 +88,9 @@ impl Database {
     /// of its own, until the program ends. Then the reaper of Testcontainers,
     /// Ryuk, which runs in a container of its own with access to Docker,
     /// removes it a few seconds later, however the program ends, even if it
-    /// is killed, once the database is registered with Ryuk, which happens
-    /// right after the database has started. A program that ends while the
-    /// database is still starting, which takes about a second, may leave it
-    /// behind. Ryuk is configured as in the other languages of
-    /// Testcontainers: the environment variable
+    /// is killed, and even while the database is still starting, since the
+    /// database is registered with Ryuk before it starts. Ryuk is configured
+    /// as in the other languages of Testcontainers: the environment variable
     /// `TESTCONTAINERS_RYUK_CONTAINER_PRIVILEGED` set to `true` starts it
     /// privileged, `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE` names the socket of
     /// Docker where it does not live at `/var/run/docker.sock`, and
@@ -112,7 +118,10 @@ impl Database {
     /// The container stops once the database is dropped, so nothing is left
     /// behind after the test. It has to be dropped within the Tokio runtime
     /// that started it, which a database that a test holds in a local variable
-    /// is.
+    /// is. If the program ends before, for example since it is killed, Ryuk
+    /// removes the container along with the shared database, provided that a
+    /// test of the program has asked for that one, since only the shared
+    /// database starts Ryuk. Otherwise, the container is left behind.
     ///
     /// # Panics
     ///
@@ -238,14 +247,27 @@ pub async fn store_with(
         .await
 }
 
-/// Starts the container of a database, from the image the environment chooses.
+/// Starts the container of a database, from the image the environment chooses,
+/// with the label of the session of the program.
 async fn start_container() -> Result<Container, Failure> {
-    let mut builder = Container::builder();
+    let mut builder = Container::builder().with_label(SESSION_LABEL, &SESSION);
     if let Ok(image_tag) = env::var(IMAGE_TAG_VARIABLE) {
         builder = builder.with_image_tag(&image_tag);
     }
 
     Ok(builder.start().await?)
+}
+
+/// Returns a session that no other program shares: 128 bits as lowercase
+/// hexadecimal digits, which the reaper takes as they are, since it decodes
+/// its filters as a URL query, and acknowledges even one it can not read. The
+/// bits come from two hashes over the process ID and the time, with keys that
+/// the standard library chooses at random.
+fn new_session() -> String {
+    let state = RandomState::new();
+    let now = SystemTime::now();
+    let [high, low] = [0_u8, 1].map(|half| state.hash_one((half, process::id(), now)));
+    format!("{high:016x}{low:016x}")
 }
 
 /// What a thread of its own starts at most once for the whole program, and
@@ -351,15 +373,13 @@ fn text_of(panic: &(dyn Any + Send)) -> &str {
         .unwrap_or("a value that is no text")
 }
 
-/// Starts the reaper and the container of the shared database, and hands the
-/// container to the reaper. A container that the reaper does not take on is
-/// removed again, since it is dropped within this runtime.
+/// Starts the reaper, names the session of the program to it, and only then
+/// starts the container of the shared database, which carries the label of the
+/// session, so that the reaper removes it however the program ends, even while
+/// the container is still starting.
 async fn start_watched() -> Result<(Database, (Option<Reaper>, Container)), Failure> {
-    let mut reaper = Reaper::start().await?;
+    let reaper = Reaper::start(&SESSION).await?;
     let container = start_container().await?;
-    if let Some(reaper) = &mut reaper {
-        reaper.watch(&container).await?;
-    }
 
     let database = Database {
         url: container.get_base_url().await?,
