@@ -86,8 +86,11 @@ fn expand_event(input: &DeriveInput) -> Result<TokenStream2> {
 }
 
 /// Reads the event type of an event, and the function its schema goes through,
-/// if it names one, from `#[event(type = "...", schema_with = "...")]`.
+/// if it names one, from `#[event(type = "...", schema_with = "...")]`, which
+/// it refuses on a field.
 fn event_attributes_of(input: &DeriveInput) -> Result<(LitStr, Option<Path>)> {
+    refuse_on_fields(input, "event")?;
+
     let mut event_type: Option<LitStr> = None;
     let mut schema_with: Option<Path> = None;
 
@@ -124,8 +127,10 @@ fn event_attributes_of(input: &DeriveInput) -> Result<(LitStr, Option<Path>)> {
 /// `#[architecturekit(schema_with = "...")]`. The attribute is named after the
 /// kit, so that it does not collide with the `schema` attribute of other
 /// derives, such as the one of utoipa, and since it belongs to the kit, it
-/// takes nothing else.
+/// takes nothing else, and is refused on a field.
 fn schema_with_of(input: &DeriveInput) -> Result<Option<Path>> {
+    refuse_on_fields(input, "architecturekit")?;
+
     let mut schema_with: Option<Path> = None;
 
     for attribute in input
@@ -142,6 +147,27 @@ fn schema_with_of(input: &DeriveInput) -> Result<Option<Path>> {
     }
 
     Ok(schema_with)
+}
+
+/// Refuses the attribute of a derive on every field of a struct, since the
+/// derive reads it only on the type, while rustc lets it stand anywhere within
+/// the type, where it would be ignored without a word. An enum or a union has
+/// no schema that can be derived, which the derive refuses anyway.
+fn refuse_on_fields(input: &DeriveInput, attribute: &str) -> Result<()> {
+    let Data::Struct(data) = &input.data else {
+        return Ok(());
+    };
+
+    for field in &data.fields {
+        if let Some(found) = field.attrs.iter().find(|a| a.path().is_ident(attribute)) {
+            return Err(Error::new(
+                found.span(),
+                format!("#[{attribute}(...)] is only read on the type, not on a field"),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// Reads the path of the function that the schema goes through, which is

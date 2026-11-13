@@ -291,6 +291,29 @@ async fn runs_the_upcasters_of_a_stored_history() {
 }
 
 #[tokio::test]
+async fn runs_the_upcasters_of_an_event_read_from_the_database() {
+    // The client SDK hands out an event read from the database as an
+    // eventsourcingdb::Event, which a converted stored event stands in for.
+    let old: eventsourcingdb::Event = StoredEvent::raw(
+        Subject::new("/account/1"),
+        0,
+        "test.account.opened.v1",
+        json!({ "whatever": true }),
+    )
+    .into();
+
+    given_stored(&decider(), [old])
+        .when(open("jane"))
+        .await
+        .then_state(|state| {
+            assert_eq!(
+                state.owner, "from the old shape",
+                "the upcaster did not run"
+            );
+        });
+}
+
+#[tokio::test]
 async fn fails_on_a_stored_event_without_a_rule() {
     let message = failure_of(|| {
         let _ = given_stored(

@@ -82,8 +82,8 @@ mod tests;
 /// "io.thenativeweb.todo.invented".clone_into(&mut invented.event_type);
 /// ```
 ///
-/// It turns into an `eventsourcingdb::Event` with `into`, whose hash is no
-/// real one, so verifying it fails.
+/// It turns into an `eventsourcingdb::Event` with `into`, as does a reference
+/// to it. The hash of that event is no real one, so verifying it fails.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct StoredEvent {
@@ -192,6 +192,12 @@ impl From<StoredEvent> for eventsourcingdb::Event {
     }
 }
 
+impl From<&StoredEvent> for eventsourcingdb::Event {
+    fn from(stored: &StoredEvent) -> Self {
+        stored.clone().into()
+    }
+}
+
 /// Turns typed events into stored ones of the same subject, and numbers them
 /// from zero, as the database does. It needs the feature `testing`.
 ///
@@ -249,7 +255,9 @@ pub fn stored_events_at<E: Events>(
 
 /// Applies stored events to a projection, one after another, as
 /// [`Store::catch_up_projection`](crate::Store::catch_up_projection) does,
-/// but without a database. It needs the feature `testing`.
+/// but without a database. It takes the events as [`StoredEvent`]s, owned or
+/// borrowed, or as events of the client SDK, such as those read from a
+/// database. It needs the feature `testing`.
 ///
 /// The events take the same way as in a run: the upcasters of the projection
 /// run, an event of a type the projection has no variant for is left out, an
@@ -309,9 +317,9 @@ pub fn stored_events_at<E: Events>(
 /// [`ProjectionError::Panicked`], with the event, as in a run.
 pub async fn project<P: Projection>(
     projection: &P,
-    events: &[StoredEvent],
+    events: impl IntoIterator<Item = impl Into<eventsourcingdb::Event>>,
 ) -> Result<(), ProjectionError> {
-    drive_through(&mut RebuildWriter::new(projection), events, 1).await
+    drive_through(&mut RebuildWriter::new(projection), converted(events), 1).await
 }
 
 /// Applies stored events to a transactional projection within one
@@ -321,7 +329,7 @@ pub async fn project<P: Projection>(
 /// last event, and begins no transaction without events. It needs the
 /// feature `testing`.
 ///
-/// The events take the same way as with [`project`].
+/// It takes the same events as [`project`], and they take the same way.
 ///
 /// # Errors
 ///
@@ -332,23 +340,33 @@ pub async fn project<P: Projection>(
 /// run, and reported as [`ProjectionError::Panicked`].
 pub async fn project_transactional<P: TransactionalProjection>(
     projection: &P,
-    events: &[StoredEvent],
+    events: impl IntoIterator<Item = impl Into<eventsourcingdb::Event>>,
 ) -> Result<(), ProjectionError> {
+    let events = converted(events);
+    let batch_size = events.len();
+
     drive_through(
         &mut TransactionalWriter::new(projection),
         events,
-        events.len(),
+        batch_size,
     )
     .await
+}
+
+/// Turns the events into events of the client SDK, as a run reads them.
+fn converted(
+    events: impl IntoIterator<Item = impl Into<eventsourcingdb::Event>>,
+) -> Vec<eventsourcingdb::Event> {
+    events.into_iter().map(Into::into).collect()
 }
 
 /// Drives the events through the writer, in batches of the given size.
 async fn drive_through<W: Writer>(
     writer: &mut W,
-    events: &[StoredEvent],
+    events: Vec<eventsourcingdb::Event>,
     batch_size: usize,
 ) -> Result<(), ProjectionError> {
-    let events = events.iter().cloned().map(|event| Ok(event.into()));
+    let events = events.into_iter().map(Ok);
 
     drive(
         writer,

@@ -9,7 +9,8 @@ use crate::Schema;
 /// rejects events whose data does not match it (see [`Schema`]).
 ///
 /// Derive it, together with serde's `Serialize` and `Deserialize`, and name
-/// the event type with the `event` attribute:
+/// the event type with the `event` attribute on the type, which the derive
+/// refuses on a field:
 ///
 /// ```
 /// use architecturekit::Event;

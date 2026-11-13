@@ -396,7 +396,7 @@ let Ok(book) = book_list.books.get("42").await;
 assert_eq!(book.map(|book| book.title), Some("2001".to_owned()));
 ```
 
-`project` returns the failure of the projection, so that a test can check that a projection refuses an event. The fields of a `StoredEvent` are public, so that a test can give an event a type that the projection does not know, data that it can not read, or a time of its own. `project_transactional` drives a transactional projection within one transaction.
+`project` takes `StoredEvent`s, owned or borrowed, as well as events of the client SDK, such as those read from a database, and returns the failure of the projection, so that a test can check that a projection refuses an event. The fields of a `StoredEvent` are public, so that a test can give an event a type that the projection does not know, data that it can not read, or a time of its own. `project_transactional` drives a transactional projection within one transaction.
 
 ## License
 

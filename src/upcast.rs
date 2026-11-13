@@ -191,6 +191,11 @@ impl Upcasters {
 
     /// Translates stored events of the given type into a newer shape, before
     /// any state or projection sees them. The result is never written back.
+    /// An upcaster derives the events it returns from the one it gets, with
+    /// [`with_type`](UpcastEvent::with_type) and
+    /// [`with_data`](UpcastEvent::with_data), since an event built with
+    /// [`UpcastEvent::new`] would carry the subject `/` and the ID 0 into the
+    /// state or the projection.
     ///
     /// Upcasters are chained: if the result carries a type that has an
     /// upcaster of its own, that one runs too, so only one step per version is

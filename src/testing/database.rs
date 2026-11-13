@@ -80,7 +80,10 @@ impl Database {
     /// of its own, until the program ends. Then the reaper of Testcontainers,
     /// Ryuk, which runs in a container of its own with access to Docker,
     /// removes it a few seconds later, however the program ends, even if it
-    /// is killed. Ryuk is configured as in the other languages of
+    /// is killed, once the database is registered with Ryuk, which happens
+    /// right after the database has started. A program that ends while the
+    /// database is still starting, which takes about a second, may leave it
+    /// behind. Ryuk is configured as in the other languages of
     /// Testcontainers: the environment variable
     /// `TESTCONTAINERS_RYUK_CONTAINER_PRIVILEGED` set to `true` starts it
     /// privileged, `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE` names the socket of
