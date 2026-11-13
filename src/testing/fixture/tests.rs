@@ -14,6 +14,7 @@
 
 use std::{
     collections::HashMap,
+    convert::Infallible,
     panic::{self, AssertUnwindSafe},
     sync::{
         Arc,
@@ -27,7 +28,7 @@ use serde_json::json;
 use crate::{
     Categorized, Category, Command, Decider, Event, Events, ExecuteError, Precondition, Revision,
     State, Subject, UpcastEvent, Upcasters, check_preconditions,
-    testing::{given, given_stored},
+    testing::{StoredEvent, given, given_stored},
 };
 
 #[derive(Debug, Serialize, Deserialize, Event)]
@@ -80,14 +81,23 @@ fn opened(owner: &str) -> AccountEvent {
 }
 
 static ACCOUNT_UPCASTERS: std::sync::LazyLock<Upcasters> = std::sync::LazyLock::new(|| {
-    // An older type, reachable only through its upcaster.
-    Upcasters::new().upcast("test.account.opened.v1", |event: UpcastEvent| {
-        Ok::<_, serde_json::Error>(vec![
-            event
-                .with_type("test.account.opened")
-                .with_data(json!({ "owner": "from the old shape" })),
-        ])
-    })
+    Upcasters::new()
+        // An older type, reachable only through its upcaster.
+        .upcast("test.account.opened.v1", |event: UpcastEvent| {
+            Ok::<_, serde_json::Error>(vec![
+                event
+                    .with_type("test.account.opened")
+                    .with_data(json!({ "owner": "from the old shape" })),
+            ])
+        })
+        // The first version, which named no owner, since the ID of an account
+        // was its owner, as in /account/jane.
+        .upcast("test.account.opened.v0", |event: UpcastEvent| {
+            let owner = event.subject().as_str().trim_start_matches("/account/");
+            let data = json!({ "owner": owner });
+
+            Ok::<_, Infallible>(vec![event.with_type("test.account.opened").with_data(data)])
+        })
 });
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -259,7 +269,12 @@ async fn fails_on_a_history_that_can_not_be_encoded() {
 async fn runs_the_upcasters_of_a_stored_history() {
     // The old type has no Rust type any more, so only the stored shape can
     // carry it. This is exactly what typed events can not express.
-    let old = UpcastEvent::new("test.account.opened.v1", json!({ "whatever": true }));
+    let old = StoredEvent::raw(
+        Subject::new("/account/1"),
+        0,
+        "test.account.opened.v1",
+        json!({ "whatever": true }),
+    );
 
     given_stored(&decider(), [old])
         .when(open("jane"))
@@ -280,11 +295,38 @@ async fn fails_on_a_stored_event_without_a_rule() {
     let message = failure_of(|| {
         let _ = given_stored(
             &decider(),
-            [UpcastEvent::new("test.account.unheard-of", json!({}))],
+            [StoredEvent::raw(
+                Subject::new("/account/1"),
+                0,
+                "test.account.unheard-of",
+                json!({}),
+            )],
         );
     });
 
     assert!(message.starts_with("given stored: "), "{message}");
+}
+
+#[tokio::test]
+async fn hands_the_subject_of_a_stored_event_to_the_upcasters() {
+    // The first version kept the owner in the subject alone, so only the
+    // upcaster of an event with its subject can tell who it is.
+    let old = StoredEvent::raw(
+        Subject::new("/account/jane"),
+        0,
+        "test.account.opened.v0",
+        json!({}),
+    );
+
+    given_stored(&decider(), [old])
+        .when(open("golo"))
+        .await
+        .then_state(|state| {
+            assert_eq!(state.owner, "jane", "the upcaster did not read the subject");
+        })
+        .then_failed(AccountError::AlreadyOpen {
+            owner: "jane".to_owned(),
+        });
 }
 
 // Nothing.

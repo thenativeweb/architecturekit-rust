@@ -5,10 +5,11 @@
 
 use std::{convert::Infallible, sync::LazyLock};
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{Event, Events, State, UpcastEvent, Upcasters, replay_stored, step_stored};
+use crate::{Event, Events, State, Upcasters, replay_stored, step_stored};
 
 /// The current shape of the event, version three.
 #[derive(Serialize, Deserialize, Event)]
@@ -81,8 +82,12 @@ impl State for Ledger {
     }
 }
 
-fn stored(event_type: &str, data: Value) -> UpcastEvent {
-    UpcastEvent::new(event_type, data)
+/// Returns an event of the client SDK, as the database stores it and a
+/// projection of stored events gets it, with the ID 7 on the subject
+/// `/books/42`, written at noon UTC on Oct 27, 2026, from the source
+/// `https://thenativeweb.io`.
+fn stored(event_type: &str, data: Value) -> eventsourcingdb::Event {
+    crate::projection::tests::stored("7", event_type, data)
 }
 
 #[test]
@@ -163,7 +168,7 @@ fn applies_all_events_an_upcaster_splits_one_into_when_stepping() {
 
     let after = step_stored(
         &before,
-        &as_stored("io.thenativeweb.test.credited.batch", json!({})),
+        &stored("io.thenativeweb.test.credited.batch", json!({})),
     )
     .expect("the event steps");
 
@@ -175,7 +180,7 @@ fn applies_all_events_an_upcaster_splits_one_into_when_stepping() {
 fn runs_the_upcasters_when_stepping() {
     let after = step_stored(
         &Ledger::default(),
-        &as_stored("io.thenativeweb.test.credited.v1", json!({ "amount": 10 })),
+        &stored("io.thenativeweb.test.credited.v1", json!({ "amount": 10 })),
     )
     .expect("the event steps");
 
@@ -183,20 +188,16 @@ fn runs_the_upcasters_when_stepping() {
     assert_eq!(after.currency, "EUR");
 }
 
-/// Returns an event of the client SDK, as the database stores it and a
-/// projection of stored events gets it, with the ID 7 on the subject
-/// `/books/42`.
-fn as_stored(event_type: &str, data: Value) -> eventsourcingdb::Event {
-    crate::projection::tests::stored("7", event_type, data)
-}
-
-/// Where a book was put, which the first version took from the metadata of the
-/// event rather than writing it into the data.
-#[derive(Serialize, Deserialize, Event)]
+/// Where and when a book was put, and from which source, which the first
+/// version took from the metadata of the event rather than writing it into the
+/// data.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Event)]
 #[event(type = "io.thenativeweb.test.placed.v2")]
 struct Placed {
     subject: String,
     event_id: u64,
+    time: DateTime<Utc>,
+    source: String,
 }
 
 #[derive(Events)]
@@ -206,13 +207,17 @@ enum ShelfEvent {
 
 #[derive(Clone, Debug, Default)]
 struct Shelf {
-    subject: String,
-    event_id: u64,
+    placed: Option<Placed>,
 }
 
 static SHELF_UPCASTERS: LazyLock<Upcasters> = LazyLock::new(|| {
     Upcasters::new().upcast("io.thenativeweb.test.placed.v1", |event| {
-        let data = json!({ "subject": event.subject().to_string(), "event_id": event.id().get() });
+        let data = json!({
+            "subject": event.subject().to_string(),
+            "event_id": event.id().get(),
+            "time": event.time(),
+            "source": event.source(),
+        });
 
         Ok::<_, Infallible>(vec![event.with_type(Placed::EVENT_TYPE).with_data(data)])
     })
@@ -224,8 +229,7 @@ impl State for Shelf {
     fn evolve(self, event: &ShelfEvent) -> Self {
         let ShelfEvent::Placed(placed) = event;
         Shelf {
-            subject: placed.subject.clone(),
-            event_id: placed.event_id,
+            placed: Some(placed.clone()),
         }
     }
 
@@ -234,16 +238,34 @@ impl State for Shelf {
     }
 }
 
+/// Returns what the upcaster of the shelf takes from the metadata of an event
+/// that [`stored`] returns.
+fn placed_by_metadata() -> Placed {
+    Placed {
+        subject: "/books/42".to_owned(),
+        event_id: 7,
+        time: "2026-10-27T12:00:00Z".parse().expect("a time"),
+        source: "https://thenativeweb.io".to_owned(),
+    }
+}
+
 #[test]
 fn hands_the_metadata_of_the_stored_event_to_the_upcasters_when_stepping() {
     let after = step_stored(
         &Shelf::default(),
-        &as_stored("io.thenativeweb.test.placed.v1", json!({})),
+        &stored("io.thenativeweb.test.placed.v1", json!({})),
     )
     .expect("the event steps");
 
-    assert_eq!(after.subject, "/books/42");
-    assert_eq!(after.event_id, 7);
+    assert_eq!(after.placed, Some(placed_by_metadata()));
+}
+
+#[test]
+fn hands_the_metadata_of_the_stored_event_to_the_upcasters_when_replaying() {
+    let shelf: Shelf = replay_stored([stored("io.thenativeweb.test.placed.v1", json!({}))])
+        .expect("the history replays");
+
+    assert_eq!(shelf.placed, Some(placed_by_metadata()));
 }
 
 #[test]

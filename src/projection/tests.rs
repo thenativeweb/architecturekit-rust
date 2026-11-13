@@ -215,12 +215,7 @@ fn sees_what_a_state_with_the_same_upcasters_sees() {
         ),
     ];
 
-    let shelf: Shelf = replay_stored(
-        history
-            .iter()
-            .map(|event| UpcastEvent::from_stored(event).expect("the ID is a revision")),
-    )
-    .expect("the state is replayed");
+    let shelf: Shelf = replay_stored(history.clone()).expect("the state is replayed");
     let projected: Vec<String> = history
         .iter()
         .flat_map(|event| BookEvent::project(event, Some(&UPCASTERS)).expect("projected"))

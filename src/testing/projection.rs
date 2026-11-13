@@ -126,12 +126,39 @@ impl StoredEvent {
             ),
         };
 
+        Self::raw(subject, id, event.event_type(), data)
+    }
+
+    /// Creates a stored event of the given type with the given data, and the
+    /// given subject and ID, written at the beginning of 1970, from the source
+    /// `https://architecturekit.test`, as [`new`](StoredEvent::new) does. It
+    /// is meant for an event that no typed event describes, such as one of an
+    /// older type that only an upcaster knows:
+    ///
+    /// ```
+    /// use architecturekit::{Subject, testing::StoredEvent};
+    /// use serde_json::json;
+    ///
+    /// let acquired = StoredEvent::raw(
+    ///     Subject::new("/books/42"),
+    ///     0,
+    ///     "io.eventsourcingdb.library.book-acquired.v1",
+    ///     json!({ "title": "2001" }),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn raw(
+        subject: Subject,
+        id: impl Into<Revision>,
+        event_type: impl Into<String>,
+        data: Value,
+    ) -> Self {
         Self {
             id: id.into(),
             time: DateTime::UNIX_EPOCH,
             source: SOURCE.to_owned(),
             subject,
-            event_type: event.event_type().to_owned(),
+            event_type: event_type.into(),
             data,
             trace_parent: None,
             trace_state: None,
