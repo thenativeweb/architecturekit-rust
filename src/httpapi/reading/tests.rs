@@ -138,7 +138,7 @@ async fn books_on_shelf(
     };
 
     reading
-        .revisioned(&*app.books, &asked_for, app.wait, || async {
+        .revisioned(&app.books, &asked_for, app.wait, || async {
             Ok(QueryAnswer::new(books_on(&app, &query.shelf).await))
         })
         .await
@@ -161,7 +161,7 @@ async fn books_on_shelf_today(
 
     reading
         .varying(today)
-        .revisioned(&*app.books, &query, app.wait, || async {
+        .revisioned(&app.books, &query, app.wait, || async {
             Ok(QueryAnswer::new(books_on(&app, &query.shelf).await))
         })
         .await
@@ -173,7 +173,7 @@ async fn awaited_books_on_shelf(
     reading: Reading,
     Strict(query): Strict<BooksOnShelf>,
 ) -> Result<QueryAnswer<Vec<Book>>, HttpError> {
-    reading.awaiting(&*app.books, app.wait).await?;
+    reading.awaiting(&app.books, app.wait).await?;
 
     Ok(QueryAnswer::new(books_on(&app, &query.shelf).await))
 }
@@ -195,7 +195,7 @@ async fn revisioned_book_by_id(
     Strict(query): Strict<BookById>,
 ) -> Result<QueryAnswer<Book>, HttpError> {
     reading
-        .revisioned(&*app.books, &query, app.wait, || async {
+        .revisioned(&app.books, &query, app.wait, || async {
             let Ok(book) = app.books.get(&query.id).await;
             Ok(QueryAnswer::found(book))
         })
@@ -809,6 +809,35 @@ async fn a_query_that_can_not_be_encoded_goes_without_a_tag() {
         response.headers()[header::CACHE_CONTROL],
         "private, no-cache"
     );
+}
+
+#[tokio::test]
+async fn answers_with_the_revision_of_a_view_in_an_arc_or_a_box() {
+    fn books() -> InMemoryView<String, Book> {
+        let books = InMemoryView::new(|book: &Book| book.id.clone());
+        shelve(&books, 3, "42", "A");
+
+        books
+    }
+
+    let reading = Reading::of(&parts_with(&[("wait-for-revision", "3")]));
+    let shared = reading
+        .revisioned(&Arc::new(books()), &json!({}), Duration::ZERO, || async {
+            Ok(QueryAnswer::new(()))
+        })
+        .await
+        .expect("the query is answered");
+    let boxed = reading
+        .revisioned(&Box::new(books()), &json!({}), Duration::ZERO, || async {
+            Ok(QueryAnswer::new(()))
+        })
+        .await
+        .expect("the query is answered");
+
+    for (answer, held_in) in [(shared, "an Arc"), (boxed, "a Box")] {
+        let response = http::Response::<Bytes>::from(answer);
+        assert_eq!(response.headers()[REVISION], "3", "a view in {held_in}");
+    }
 }
 
 #[test]

@@ -1,13 +1,17 @@
 use std::{
+    any::Any,
     env,
     future::{self, Future},
+    panic::{self, AssertUnwindSafe},
+    sync::Once,
     thread,
 };
 
 use eventsourcingdb::{Client, container::Container};
-use tokio::sync::{OnceCell, oneshot};
+use tokio::sync::SetOnce;
 use url::Url;
 
+use super::chain;
 use crate::{EventSchema, Store, StoreBuilder};
 
 mod reaper;
@@ -21,8 +25,8 @@ use reaper::{Failure, Reaper};
 const IMAGE_TAG_VARIABLE: &str = "EVENTSOURCINGDB_IMAGE_TAG";
 
 /// The database that the tests of a program share, once one of them has asked
-/// for it.
-static SHARED: OnceCell<Database> = OnceCell::const_new();
+/// for it, or why it could not be started.
+static SHARED: StartedOnce<Database> = StartedOnce::new("architecturekit-shared-database");
 
 /// An EventSourcingDB in a container, for the tests that need a real one. It
 /// needs the feature `testcontainers`.
@@ -67,7 +71,10 @@ pub struct Database {
 
 impl Database {
     /// Returns the database that the tests of a program share. The first test
-    /// that asks for it starts it, and the others wait for that.
+    /// that asks for it starts it, and the others wait for that. It starts at
+    /// most once per program, even if the test that started it stops waiting
+    /// for it, for example since it timed out, and the tests after that get
+    /// the same database.
     ///
     /// The database keeps running beyond the test that started it, on a thread
     /// of its own, until the program ends. Then the reaper of Testcontainers,
@@ -84,16 +91,15 @@ impl Database {
     /// # Panics
     ///
     /// Fails the test if the database or Ryuk can not be started, for example
-    /// since Docker is not running. The next test that asks tries again.
+    /// since Docker is not running, with the message of the failure and those
+    /// of its causes. A failed start is not tried again: every test that asks
+    /// for the database later fails with the same message, rather than waiting
+    /// for another start that would most likely fail as well.
     pub async fn shared() -> &'static Self {
-        SHARED
-            .get_or_init(|| async {
-                match start_shared().await {
-                    Ok(database) => database,
-                    Err(error) => panic!("starting the shared database: {error}"),
-                }
-            })
-            .await
+        match SHARED.get(start_watched).await {
+            Ok(database) => database,
+            Err(failure) => panic!("starting the shared database: {failure}"),
+        }
     }
 
     /// Starts a database in a container of the test's own, and waits until it
@@ -143,11 +149,9 @@ impl Database {
     /// Returns a client of the database, for a test that reads or writes
     /// events past the store, such as one that writes an event no command
     /// would.
-    pub fn client(&self) -> impl Future<Output = Client> + Send {
-        // The address and the token are known by now, so nothing is waited
-        // for, but the client stays awaited, as it was when it asked the
-        // container.
-        future::ready(Client::new(self.url.clone(), self.api_token.clone()))
+    #[must_use]
+    pub fn client(&self) -> Client {
+        Client::new(self.url.clone(), self.api_token.clone())
     }
 
     /// Returns a store on the database that writes events with the given
@@ -189,7 +193,7 @@ impl Database {
         schemas: impl IntoIterator<Item = EventSchema>,
         configure: impl FnOnce(StoreBuilder) -> StoreBuilder,
     ) -> Store {
-        let store = configure(Store::builder(self.client().await, source)).build();
+        let store = configure(Store::builder(self.client(), source)).build();
         if let Err(failure) = store.register_schemas(schemas).await {
             panic!("registering the schemas: {failure}");
         }
@@ -241,48 +245,107 @@ async fn start_container() -> Result<Container, Failure> {
     Ok(builder.start().await?)
 }
 
-/// Starts the shared database on a thread of its own, with a runtime of its
-/// own, so that it outlives the runtime of the test that asked for it first.
-async fn start_shared() -> Result<Database, Failure> {
-    let (sender, receiver) = oneshot::channel();
-    let _ = thread::Builder::new()
-        .name("architecturekit-shared-database".to_owned())
-        .spawn(move || keep_shared(sender))?;
-
-    receiver
-        .await
-        .map_err(|_| "the thread of the shared database ended before the database started")?
+/// What a thread of its own starts at most once for the whole program, and
+/// keeps until the program ends, together with the outcome of starting it,
+/// which every caller gets: the value, or why it could not be started.
+struct StartedOnce<T> {
+    /// The name of the thread.
+    name: &'static str,
+    started: Once,
+    outcome: SetOnce<Result<T, String>>,
 }
 
-/// Starts the shared database and the reaper that watches it, hands the
-/// database over, and keeps both for as long as the program runs.
-fn keep_shared(sender: oneshot::Sender<Result<Database, Failure>>) {
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            let _ = sender.send(Err(error.into()));
-            return;
+impl<T: Send + Sync + 'static> StartedOnce<T> {
+    const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            started: Once::new(),
+            outcome: SetOnce::const_new(),
         }
-    };
+    }
 
-    runtime.block_on(async move {
-        match start_watched().await {
-            Ok((database, kept)) => {
-                // If no test waits for the database any longer, it goes, and
-                // with it the container, within this runtime.
-                if sender.send(Ok(database)).is_ok() {
+    /// Starts the thread on the first call, which runs the given start within
+    /// a runtime of its own, and waits for the outcome, as every later call
+    /// does, whose start is not run. The thread publishes the outcome whether
+    /// a caller still waits for it or not, so a caller can stop waiting at any
+    /// time, and a later one gets the same outcome. Of what the start hands
+    /// out, the thread publishes the value, and keeps the rest for as long as
+    /// the program runs.
+    ///
+    /// # Errors
+    ///
+    /// Fails with the message of the failure that the start, the runtime, or
+    /// the thread failed with, followed by those of its causes.
+    async fn get<K, Fut>(
+        &'static self,
+        start: impl FnOnce() -> Fut + Send + 'static,
+    ) -> Result<&'static T, String>
+    where
+        Fut: Future<Output = Result<(T, K), Failure>>,
+    {
+        self.started.call_once(|| {
+            let spawned = thread::Builder::new()
+                .name(self.name.to_owned())
+                .spawn(move || {
+                    if let Err(panic) = panic::catch_unwind(AssertUnwindSafe(|| self.keep(start))) {
+                        self.publish(Err(format!(
+                            "the thread {} panicked: {}",
+                            self.name,
+                            text_of(&*panic)
+                        )));
+                    }
+                });
+            if let Err(failure) = spawned {
+                self.publish(Err(chain(&failure)));
+            }
+        });
+
+        self.outcome.wait().await.as_ref().map_err(Clone::clone)
+    }
+
+    /// Runs the start within a runtime of its own, publishes its outcome, and
+    /// keeps what it has started for as long as the program runs.
+    fn keep<K, Fut>(&self, start: impl FnOnce() -> Fut)
+    where
+        Fut: Future<Output = Result<(T, K), Failure>>,
+    {
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(failure) => {
+                self.publish(Err(chain(&failure)));
+                return;
+            }
+        };
+
+        runtime.block_on(async {
+            match start().await {
+                Ok((value, kept)) => {
+                    self.publish(Ok(value));
                     let _kept = kept;
                     future::pending::<()>().await;
                 }
+                Err(failure) => self.publish(Err(chain(&*failure))),
             }
-            Err(error) => {
-                let _ = sender.send(Err(error));
-            }
-        }
-    });
+        });
+    }
+
+    /// Publishes the outcome. Only the one thread publishes, and only once,
+    /// or the first caller if the thread can not be started at all.
+    fn publish(&self, outcome: Result<T, String>) {
+        let _ = self.outcome.set(outcome);
+    }
+}
+
+/// Returns the text that a thread panicked with.
+fn text_of(panic: &(dyn Any + Send)) -> &str {
+    panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("a value that is no text")
 }
 
 /// Starts the reaper and the container of the shared database, and hands the

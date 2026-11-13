@@ -56,6 +56,11 @@ mod tests;
 ///
 /// Import it to use them, next to `TryStreamExt` and `StreamExt` of the
 /// `futures` crate for the other steps.
+///
+/// Its steps work on streams that are `Send`, as every view hands one out from
+/// [`View::all`](crate::View::all), so that the futures they lead to can be
+/// awaited in handlers and in spawned tasks; for a stream that is not `Send`,
+/// `StreamExt` and `TryStreamExt` of the `futures` crate remain.
 pub trait QueryExt<T, E>: Stream<Item = Result<T, E>> + Sized {
     /// Sorts the items by a key, and hands them back as a stream, so that
     /// `skip` and `take` can follow. The sort is stable, so items with equal

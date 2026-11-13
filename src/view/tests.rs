@@ -895,6 +895,53 @@ async fn reads_every_item_through_the_interface() {
     assert_eq!(titles_of(&view).await, ["Dune", "Solaris"]);
 }
 
+#[tokio::test]
+async fn reads_a_view_in_an_arc_a_box_or_behind_a_reference_through_the_interface() {
+    // A projection and its queries share a view, so it lives in an Arc, or in
+    // a Box, or is borrowed, and a query takes it as it is, without
+    // dereferencing it first.
+    async fn read<V>(view: &V) -> (Vec<String>, Option<String>, Option<Revision>)
+    where
+        V: KeyedView<str, Book> + Revisioned,
+    {
+        let titles = view
+            .all()
+            .map_ok(|book| book.title)
+            .try_collect()
+            .await
+            .expect("the view can be read");
+        let title = view
+            .get("42")
+            .await
+            .expect("the view can be read")
+            .map(|book| book.title);
+        view.wait_for(Revision::from(2))
+            .await
+            .expect("the view has seen the revision");
+        let revision = view.revision().await.expect("the view knows its revision");
+
+        (titles, title, revision)
+    }
+
+    fn filled() -> InMemoryView<String, Book> {
+        let view = book_view();
+        must_insert(&view, 1, Book::new("42").titled("Dune"));
+        must_insert(&view, 2, Book::new("23").titled("Solaris"));
+        view.seen(Revision::from(2));
+
+        view
+    }
+
+    let expected = (
+        vec!["Dune".to_owned(), "Solaris".to_owned()],
+        Some("Dune".to_owned()),
+        Some(Revision::from(2)),
+    );
+    assert_eq!(read(&Arc::new(filled())).await, expected, "in an Arc");
+    assert_eq!(read(&Box::new(filled())).await, expected, "in a Box");
+    assert_eq!(read(&&filled()).await, expected, "behind a reference");
+}
+
 #[test]
 fn names_itself() {
     assert_eq!(Outcome::Applied.to_string(), "applied");

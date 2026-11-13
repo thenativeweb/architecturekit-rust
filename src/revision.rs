@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, future::Future, str::FromStr, time::Duration};
+use std::{error::Error, fmt, future::Future, str::FromStr, sync::Arc, time::Duration};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
@@ -218,6 +218,46 @@ pub trait Revisioned: Send + Sync {
     ///
     /// Fails if the view could not be asked.
     fn wait_for(&self, revision: Revision) -> impl Future<Output = Result<(), Self::Error>> + Send;
+}
+
+/// A reference to a view has the revision of the view.
+impl<V: Revisioned + ?Sized> Revisioned for &V {
+    type Error = V::Error;
+
+    fn revision(&self) -> impl Future<Output = Result<Option<Revision>, V::Error>> + Send {
+        (**self).revision()
+    }
+
+    fn wait_for(&self, revision: Revision) -> impl Future<Output = Result<(), V::Error>> + Send {
+        (**self).wait_for(revision)
+    }
+}
+
+/// A boxed view has the revision of the view.
+impl<V: Revisioned + ?Sized> Revisioned for Box<V> {
+    type Error = V::Error;
+
+    fn revision(&self) -> impl Future<Output = Result<Option<Revision>, V::Error>> + Send {
+        (**self).revision()
+    }
+
+    fn wait_for(&self, revision: Revision) -> impl Future<Output = Result<(), V::Error>> + Send {
+        (**self).wait_for(revision)
+    }
+}
+
+/// A shared view has the revision of the view, so that a view that its
+/// projection and its queries share is waited for as it is.
+impl<V: Revisioned + ?Sized> Revisioned for Arc<V> {
+    type Error = V::Error;
+
+    fn revision(&self) -> impl Future<Output = Result<Option<Revision>, V::Error>> + Send {
+        (**self).revision()
+    }
+
+    fn wait_for(&self, revision: Revision) -> impl Future<Output = Result<(), V::Error>> + Send {
+        (**self).wait_for(revision)
+    }
 }
 
 /// Returns the highest event ID among written events, which is the revision a

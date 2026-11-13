@@ -858,6 +858,34 @@ async fn expects_exactly_the_items_in_their_order() {
 }
 
 #[tokio::test]
+async fn reads_a_view_in_an_arc_or_a_box() {
+    // A projection and its queries share a view, so it lives in an Arc, or in
+    // a Box, and a test hands it over as it is, without dereferencing it.
+    async fn filled() -> InMemoryView<String, String> {
+        let owners = TypedOwners::new();
+        project(
+            &owners,
+            &stored_events(
+                &Subject::new("/account/1"),
+                [opened("golo"), opened("jane")],
+            ),
+        )
+        .await
+        .expect("the events are applied");
+
+        owners.view
+    }
+
+    let shared = Arc::new(filled().await);
+    assert_eq!(items_of(&shared).await, ["golo", "jane"]);
+    expect_items(&shared, ["golo".to_owned(), "jane".to_owned()]).await;
+
+    let boxed = Box::new(filled().await);
+    assert_eq!(items_of(&boxed).await, ["golo", "jane"]);
+    expect_items(&boxed, ["golo".to_owned(), "jane".to_owned()]).await;
+}
+
+#[tokio::test]
 async fn fails_expect_items_for_other_items_or_another_order() {
     let failure = AssertUnwindSafe(expect_items(
         &shelf(&["2001", "2010"]),

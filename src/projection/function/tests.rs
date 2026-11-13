@@ -1,7 +1,8 @@
 // These tests check projection_fn, which turns a function into a projection:
 // it applies every event with the function, hands on the error the function
 // returns, takes typed events as well as stored ones, and brings along neither
-// upcasters nor a record of what it has seen.
+// upcasters nor a record of what it has seen. Its type names the events first
+// and the function last, as projection_fn does.
 
 use std::{
     convert::Infallible,
@@ -10,7 +11,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::projection_fn;
+use super::{ProjectionFn, projection_fn};
 use crate::{DomainError, Envelope, Event, Events, Projection, Subject};
 
 #[derive(Debug, Serialize, Deserialize, Event)]
@@ -86,6 +87,19 @@ fn takes_the_events_as_they_are_stored() {
     });
 
     assert_projection_of_stored_events(&projection);
+}
+
+#[test]
+fn names_the_events_before_the_function() {
+    struct Library<F> {
+        catalog: ProjectionFn<BookEvent, F>,
+    }
+
+    let library = Library {
+        catalog: projection_fn(|_: Envelope<BookEvent>| async { Ok::<(), Infallible>(()) }),
+    };
+
+    assert_eq!(format!("{:?}", library.catalog), "ProjectionFn { .. }");
 }
 
 #[test]

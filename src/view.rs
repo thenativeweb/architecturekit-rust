@@ -51,6 +51,55 @@ pub trait KeyedView<K: ?Sized, T>: View<T> {
     fn get(&self, key: &K) -> impl Future<Output = Result<Option<T>, Self::Error>> + Send;
 }
 
+/// A reference to a view hands out the items of the view.
+impl<T, V: View<T> + ?Sized> View<T> for &V {
+    type Error = V::Error;
+
+    fn all(&self) -> impl Stream<Item = Result<T, V::Error>> + Send {
+        (**self).all()
+    }
+}
+
+/// A boxed view hands out the items of the view.
+impl<T, V: View<T> + ?Sized> View<T> for Box<V> {
+    type Error = V::Error;
+
+    fn all(&self) -> impl Stream<Item = Result<T, V::Error>> + Send {
+        (**self).all()
+    }
+}
+
+/// A shared view hands out the items of the view, so that a view that its
+/// projection and its queries share is read as it is.
+impl<T, V: View<T> + ?Sized> View<T> for Arc<V> {
+    type Error = V::Error;
+
+    fn all(&self) -> impl Stream<Item = Result<T, V::Error>> + Send {
+        (**self).all()
+    }
+}
+
+/// A reference to a view finds the items of the view.
+impl<K: ?Sized, T, V: KeyedView<K, T> + ?Sized> KeyedView<K, T> for &V {
+    fn get(&self, key: &K) -> impl Future<Output = Result<Option<T>, V::Error>> + Send {
+        (**self).get(key)
+    }
+}
+
+/// A boxed view finds the items of the view.
+impl<K: ?Sized, T, V: KeyedView<K, T> + ?Sized> KeyedView<K, T> for Box<V> {
+    fn get(&self, key: &K) -> impl Future<Output = Result<Option<T>, V::Error>> + Send {
+        (**self).get(key)
+    }
+}
+
+/// A shared view finds the items of the view.
+impl<K: ?Sized, T, V: KeyedView<K, T> + ?Sized> KeyedView<K, T> for Arc<V> {
+    fn get(&self, key: &K) -> impl Future<Output = Result<Option<T>, V::Error>> + Send {
+        (**self).get(key)
+    }
+}
+
 /// Holds the items of a read model in memory, each under a key of its own. It
 /// is the one view the kit ships, and because it keeps no checkpoint, its
 /// projection is rebuilt on every start.
@@ -114,9 +163,11 @@ pub trait KeyedView<K: ?Sized, T>: View<T> {
 /// [`all`](View::all), since that blocks forever. A panic in one of
 /// them leaves the view usable for those who read it.
 ///
-/// This is the stored shape, not the answer to a query. Use `TryStreamExt` of
-/// the `futures` crate on [`View::all`] to filter, order and project it into
-/// whatever an answer needs.
+/// This is the stored shape, not the answer to a query. Turn the stream of
+/// [`View::all`] into whatever an answer needs, with `TryStreamExt` of the
+/// `futures` crate to filter and map the items, and with
+/// [`QueryExt`](crate::query::QueryExt) to order them, and to get the first,
+/// the single one, or their number.
 pub struct InMemoryView<K, T> {
     shared: Arc<Shared<K, T>>,
 }

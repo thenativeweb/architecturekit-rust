@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::fmt;
 
 use serde_json::Value;
 
@@ -6,6 +6,8 @@ use crate::{
     Categorized, Category, Command, Decider, Events, ExecuteError, Precondition, State, Subject,
     check_preconditions, replay, replay_stored, store::unencodable, testing::StoredEvent,
 };
+
+use super::chain;
 
 #[cfg(test)]
 mod tests;
@@ -291,8 +293,45 @@ impl<S: State, D: fmt::Debug> Decision<S, D> {
 
     /// Expects the command to have failed with an error that the given
     /// function accepts, for a failure that neither its value nor its category
-    /// tells apart, such as a refusal of the kit, as in
-    /// `decision.then_failed_matching(|failure| matches!(failure, ExecuteError::NotARevision(_)))`.
+    /// tells apart, such as a refusal of the kit, which may have the same
+    /// category as an error of the decider:
+    ///
+    /// ```
+    /// # use architecturekit::{Command, Decider, Event, Events, Precondition, State, Subject};
+    /// # use serde::{Deserialize, Serialize};
+    /// # #[derive(Serialize, Deserialize, Event)]
+    /// # #[event(type = "io.eventsourcingdb.library.book-borrowed")]
+    /// # struct BookBorrowed { reader: String }
+    /// # #[derive(Events)]
+    /// # enum BookEvent { Borrowed(BookBorrowed) }
+    /// # #[derive(Clone, Default)]
+    /// # struct Book;
+    /// # impl State for Book {
+    /// #     type Event = BookEvent;
+    /// #     fn evolve(self, _: &BookEvent) -> Self { self }
+    /// # }
+    /// # #[derive(Debug)]
+    /// # enum BorrowError {}
+    /// # struct BorrowBook { book: Subject, reader: String }
+    /// # impl Command for BorrowBook {
+    /// #     fn subject(&self) -> Subject { self.book.clone() }
+    /// #     fn preconditions(&self) -> Vec<Precondition> { vec![] }
+    /// # }
+    /// # let borrow_book = Decider::new(|cmd: BorrowBook, _: Book| async move {
+    /// #     Ok::<_, BorrowError>(vec![BookEvent::Borrowed(BookBorrowed { reader: cmd.reader })])
+    /// # });
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    /// # runtime.block_on(async {
+    /// use architecturekit::{ExecuteError, testing::given};
+    ///
+    /// // In a #[tokio::test], for a command that declares no preconditions,
+    /// // which the kit refuses before the decider decides:
+    /// given(&borrow_book, [])
+    ///     .when(BorrowBook { book: Subject::new("/books/42"), reader: "Jane".to_owned() })
+    ///     .await
+    ///     .then_failed_matching(|failure| matches!(failure, ExecuteError::Permanent(_)));
+    /// # });
+    /// ```
     ///
     /// # Panics
     ///
@@ -439,16 +478,4 @@ fn describe_failure<D: fmt::Debug>(failure: &ExecuteError<D>) -> String {
             format!("outcome unknown: {}", failure.message())
         }
     }
-}
-
-/// Returns the message of an error together with those of its causes.
-fn chain(error: &dyn Error) -> String {
-    let mut messages = vec![error.to_string()];
-    let mut source = error.source();
-    while let Some(cause) = source {
-        messages.push(cause.to_string());
-        source = cause.source();
-    }
-
-    messages.join(": ")
 }

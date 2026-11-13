@@ -77,3 +77,15 @@ pub use projection::{
     StoredEvent, expect_items, items_of, project, project_transactional, stored_events,
     stored_events_at,
 };
+
+/// Returns the message of an error together with those of its causes.
+fn chain(error: &dyn std::error::Error) -> String {
+    let mut messages = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(cause) = source {
+        messages.push(cause.to_string());
+        source = cause.source();
+    }
+
+    messages.join(": ")
+}
