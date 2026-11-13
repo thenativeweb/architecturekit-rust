@@ -1,14 +1,17 @@
 // These tests check the isolated database: it hands out a store that writes
 // and reads, registers the schemas first, and fails the test for a schema it
-// refuses. The options of a store come from its builder.
+// refuses. The options of a store come from its builder. It carries the label
+// of the session of the program, as the shared database does.
 //
 // They also check the shared database: the tests of a program get the same
 // one, it outlives the runtime that started it, and the reaper removes it once
-// the program has ended, which a second run of this program shows. It starts
-// at most once, also if the first caller stops waiting, and a failed start
-// fails every caller with the same message.
+// the program has ended, also if the program ends while the database is still
+// starting, which second runs of this program show. It starts at most once,
+// also if the first caller stops waiting, and a failed start fails every
+// caller with the same message.
 
 use std::{
+    collections::HashMap,
     error::Error,
     fmt, io,
     panic::AssertUnwindSafe,
@@ -20,9 +23,16 @@ use std::{
 use eventsourcingdb::Client;
 use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use testcontainers::bollard::{
+    Docker,
+    models::ContainerSummary,
+    query_parameters::{ListContainersOptionsBuilder, RemoveContainerOptionsBuilder},
+};
 use tokio::sync::oneshot;
 
-use super::{Database, Failure, StartedOnce, store, store_with};
+use super::{
+    Database, Failure, SESSION, StartedOnce, new_session, reaper::SESSION_LABEL, store, store_with,
+};
 use crate::{Event, EventOn, EventSchema, Events, Precondition, State, Subject};
 
 #[derive(Debug, Serialize, Deserialize, Event)]
@@ -136,6 +146,57 @@ async fn fails_the_test_for_a_schema_the_database_refuses() {
     );
 }
 
+/// Returns the containers, running or not, that carry the label of the given
+/// session.
+async fn containers_of(session: &str) -> Vec<ContainerSummary> {
+    let label = format!("{SESSION_LABEL}={session}");
+    let filters = HashMap::from([("label", vec![label.as_str()])]);
+    let options = ListContainersOptionsBuilder::new()
+        .all(true)
+        .filters(&filters)
+        .build();
+
+    Docker::connect_with_defaults()
+        .expect("Docker can be reached")
+        .list_containers(Some(options))
+        .await
+        .expect("Docker lists the containers")
+}
+
+/// Removes the given containers, so that a test leaves nothing behind, even
+/// if the code it checks does.
+async fn remove(containers: &[ContainerSummary]) {
+    let docker = Docker::connect_with_defaults().expect("Docker can be reached");
+    for id in containers
+        .iter()
+        .filter_map(|container| container.id.as_deref())
+    {
+        let options = RemoveContainerOptionsBuilder::new()
+            .force(true)
+            .v(true)
+            .build();
+        let _ = docker.remove_container(id, Some(options)).await;
+    }
+}
+
+/// Returns the ID of the container of an isolated database: the one with the
+/// label of the session of the program that publishes the port of the
+/// database.
+async fn id_of(database: &Database) -> Option<String> {
+    let port = database.url().port();
+    containers_of(&SESSION)
+        .await
+        .into_iter()
+        .find(|container| {
+            container
+                .ports
+                .iter()
+                .flatten()
+                .any(|published| published.public_port == port)
+        })
+        .and_then(|container| container.id)
+}
+
 #[tokio::test]
 async fn is_a_database_of_the_test_s_own_which_is_stopped_once_dropped() {
     let first = Database::isolated().await;
@@ -166,11 +227,43 @@ async fn is_a_database_of_the_test_s_own_which_is_stopped_once_dropped() {
         "a database does not see the events of another one"
     );
 
-    let client = first.client();
+    // Docker tells whether the container is gone, rather than a ping of its
+    // address, which Docker Desktop may still answer for a moment after the
+    // container has been removed.
+    let id = id_of(&first)
+        .await
+        .expect("Docker shows the container of the database");
     drop(first);
     assert!(
-        client.ping().await.is_err(),
+        containers_of(&SESSION)
+            .await
+            .iter()
+            .all(|container| container.id.as_ref() != Some(&id)),
         "the database has to be stopped once it is dropped"
+    );
+}
+
+#[test]
+fn a_session_is_128_bits_as_lowercase_hexadecimal_digits_and_differs_every_time() {
+    let session = new_session();
+
+    assert_eq!(session.len(), 32, "{session}");
+    assert!(
+        session
+            .chars()
+            .all(|digit| digit.is_ascii_digit() || ('a'..='f').contains(&digit)),
+        "{session}"
+    );
+    assert_ne!(new_session(), session);
+}
+
+#[tokio::test]
+async fn labels_an_isolated_database_with_the_session_of_the_program() {
+    let database = Database::isolated().await;
+
+    assert!(
+        id_of(&database).await.is_some(),
+        "the container of the database carries the label of the session"
     );
 }
 
@@ -398,50 +491,119 @@ async fn hands_out_a_store_on_the_shared_database() {
     );
 }
 
+/// Runs the given test of this program as a program of its own, with the given
+/// environment variable set, which turns the test on, and returns the session
+/// that it prints.
+fn session_printed_by(test: &str, variable: &str) -> String {
+    let program = std::env::current_exe().expect("the test program can be found");
+    let output = std::process::Command::new(program)
+        .args([test, "--exact", "--ignored", "--nocapture"])
+        .env(variable, "1")
+        .output()
+        .expect("the test program runs");
+    let printed = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{printed}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    printed
+        .lines()
+        .find_map(|line| line.strip_prefix("session: "))
+        .unwrap_or_else(|| panic!("the session is printed: {printed}"))
+        .to_owned()
+}
+
+/// Waits until Docker shows no container with the label of the given session
+/// any longer, for 60 seconds at most, and returns the containers that are
+/// left then, after removing them, so that the test leaves nothing behind even
+/// if the code it checks does. The reaper waits a few seconds after the
+/// program has gone, in case it connects again, and removes the containers
+/// then. Docker tells whether they are gone, rather than a ping of their
+/// address, which Docker Desktop may still answer for a while after they have
+/// been removed.
+async fn left_behind_by(session: &str) -> Vec<ContainerSummary> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut left_behind = containers_of(session).await;
+    while !left_behind.is_empty() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        left_behind = containers_of(session).await;
+    }
+    remove(&left_behind).await;
+
+    left_behind
+}
+
 /// The environment variable that turns the next test into the program whose
 /// shared database the test after it watches being removed.
-const PRINTS_THE_SHARED_DATABASE: &str = "ARCHITECTUREKIT_PRINTS_THE_SHARED_DATABASE";
+const PRINTS_THE_SESSION: &str = "ARCHITECTUREKIT_PRINTS_THE_SESSION";
 
 #[tokio::test]
 #[ignore = "run by removes_the_shared_database_once_the_program_ends"]
-async fn prints_the_address_of_the_shared_database() {
-    if std::env::var(PRINTS_THE_SHARED_DATABASE).is_err() {
+async fn prints_the_session_once_the_shared_database_has_started() {
+    if std::env::var(PRINTS_THE_SESSION).is_err() {
         return;
     }
 
-    println!("shared database: {}", Database::shared().await.url());
+    let _ = Database::shared().await;
+    assert!(
+        !containers_of(&SESSION).await.is_empty(),
+        "the shared database carries the label of the session"
+    );
+    println!("session: {}", *SESSION);
 }
 
 #[tokio::test]
 async fn removes_the_shared_database_once_the_program_ends() {
-    let program = std::env::current_exe().expect("the test program can be found");
-    let output = std::process::Command::new(program)
-        .args([
-            "testing::database::tests::prints_the_address_of_the_shared_database",
-            "--exact",
-            "--ignored",
-            "--nocapture",
-        ])
-        .env(PRINTS_THE_SHARED_DATABASE, "1")
-        .output()
-        .expect("the test program runs");
-    let printed = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "{printed}");
+    let session = session_printed_by(
+        "testing::database::tests::prints_the_session_once_the_shared_database_has_started",
+        PRINTS_THE_SESSION,
+    );
 
-    let url = printed
-        .lines()
-        .find_map(|line| line.strip_prefix("shared database: "))
-        .unwrap_or_else(|| panic!("the address is printed: {printed}"));
-    let client = Client::new(url.parse().expect("the address is a URL"), "unused");
+    assert!(
+        left_behind_by(&session).await.is_empty(),
+        "the shared database has to be removed once its program has ended"
+    );
+}
 
-    // The reaper waits a few seconds after the program has gone, in case it
-    // connects again, and removes the container then.
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while client.ping().await.is_ok() {
-        assert!(
-            Instant::now() < deadline,
-            "the shared database has to be removed once its program has ended"
-        );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+/// The environment variable that turns the next test into a program that ends
+/// while its shared database is still starting.
+const ENDS_WHILE_THE_SHARED_DATABASE_STARTS: &str =
+    "ARCHITECTUREKIT_ENDS_WHILE_THE_SHARED_DATABASE_STARTS";
+
+#[tokio::test]
+#[ignore = "run by leaves_nothing_behind_if_the_program_ends_while_the_shared_database_starts"]
+async fn ends_while_the_shared_database_starts() {
+    if std::env::var(ENDS_WHILE_THE_SHARED_DATABASE_STARTS).is_err() {
+        return;
     }
+
+    println!("session: {}", *SESSION);
+    // The program ends as soon as Docker shows the container, which is long
+    // before the database in it answers.
+    let started = tokio::spawn(Database::shared());
+    loop {
+        if !containers_of(&SESSION).await.is_empty() {
+            std::process::exit(0);
+        }
+        if started.is_finished() {
+            let _ = started.await.expect("the shared database starts");
+            panic!("the shared database has started without the label of the session");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn leaves_nothing_behind_if_the_program_ends_while_the_shared_database_starts() {
+    let session = session_printed_by(
+        "testing::database::tests::ends_while_the_shared_database_starts",
+        ENDS_WHILE_THE_SHARED_DATABASE_STARTS,
+    );
+
+    assert!(
+        left_behind_by(&session).await.is_empty(),
+        "the shared database has to be removed, although its program ended while it was still starting"
+    );
 }
