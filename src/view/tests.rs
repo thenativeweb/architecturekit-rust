@@ -896,9 +896,10 @@ async fn reads_every_item_through_the_interface() {
 }
 
 #[tokio::test]
-async fn reads_a_view_in_an_arc_or_a_box_through_the_interface() {
+async fn reads_a_view_in_an_arc_a_box_or_behind_a_reference_through_the_interface() {
     // A projection and its queries share a view, so it lives in an Arc, or in
-    // a Box, and a query takes it as it is, without dereferencing it first.
+    // a Box, or is borrowed, and a query takes it as it is, without
+    // dereferencing it first.
     async fn read<V>(view: &V) -> (Vec<String>, Option<String>, Option<Revision>)
     where
         V: KeyedView<str, Book> + Revisioned,
@@ -938,6 +939,7 @@ async fn reads_a_view_in_an_arc_or_a_box_through_the_interface() {
     );
     assert_eq!(read(&Arc::new(filled())).await, expected, "in an Arc");
     assert_eq!(read(&Box::new(filled())).await, expected, "in a Box");
+    assert_eq!(read(&&filled()).await, expected, "behind a reference");
 }
 
 #[test]

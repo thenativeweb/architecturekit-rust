@@ -51,6 +51,15 @@ pub trait KeyedView<K: ?Sized, T>: View<T> {
     fn get(&self, key: &K) -> impl Future<Output = Result<Option<T>, Self::Error>> + Send;
 }
 
+/// A reference to a view hands out the items of the view.
+impl<T, V: View<T> + ?Sized> View<T> for &V {
+    type Error = V::Error;
+
+    fn all(&self) -> impl Stream<Item = Result<T, V::Error>> + Send {
+        (**self).all()
+    }
+}
+
 /// A boxed view hands out the items of the view.
 impl<T, V: View<T> + ?Sized> View<T> for Box<V> {
     type Error = V::Error;
@@ -67,6 +76,13 @@ impl<T, V: View<T> + ?Sized> View<T> for Arc<V> {
 
     fn all(&self) -> impl Stream<Item = Result<T, V::Error>> + Send {
         (**self).all()
+    }
+}
+
+/// A reference to a view finds the items of the view.
+impl<K: ?Sized, T, V: KeyedView<K, T> + ?Sized> KeyedView<K, T> for &V {
+    fn get(&self, key: &K) -> impl Future<Output = Result<Option<T>, V::Error>> + Send {
+        (**self).get(key)
     }
 }
 
