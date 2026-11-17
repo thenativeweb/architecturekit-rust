@@ -70,7 +70,7 @@ jobs:
         cache: true
         build-warnings: ""
     - name: Install cargo-hack
-      uses: taiki-e/install-action@v2.90.0
+      uses: taiki-e/install-action@v2.90.3
       with:
         tool: cargo-hack
     # Rust compiles a crate with the features its user turns on, so every
